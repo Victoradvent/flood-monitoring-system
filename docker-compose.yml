@@ -1,0 +1,63 @@
+version: '3.9'
+
+services:
+  db:
+    image: postgres:15
+    container_name: flood_db
+    restart: always
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - ./db/init:/docker-entrypoint-initdb.d
+      - db_data:/var/lib/postgresql/data
+    networks:
+      - floodnet
+
+  mqtt:
+    image: eclipse-mosquitto:2
+    container_name: flood_mqtt
+    restart: always
+    volumes:
+      - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf
+      - mosquitto_data:/mosquitto/data
+      - mosquitto_log:/mosquitto/log
+    ports:
+      - "1883:1883"   # MQTT TCP
+      - "9001:9001"   # MQTT WebSocket
+    networks:
+      - floodnet
+
+  backend:
+    build: ./backend
+    container_name: flood_backend
+    restart: always
+    env_file: .env
+    depends_on:
+      - db
+      - mqtt
+    ports:
+      - "3000:3000"
+    networks:
+      - floodnet
+
+  frontend:
+    build: ./react-dashboard
+    container_name: flood_frontend
+    restart: always
+    depends_on:
+      - backend
+    ports:
+      - "8080:80"
+    networks:
+      - floodnet
+
+volumes:
+  db_data:
+  mosquitto_data:
+  mosquitto_log:
+
+networks:
+  floodnet:
+    driver: bridge

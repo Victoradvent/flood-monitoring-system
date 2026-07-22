@@ -1,0 +1,8 @@
+CREATE TABLE IF NOT EXISTS readings (
+  id SERIAL PRIMARY KEY,
+  node_id INTEGER NOT NULL,
+  water_level NUMERIC(6,2) NOT NULL,
+  rainfall NUMERIC(6,2) DEFAULT 0,
+  temperature NUMERIC(6,2) DEFAULT 0,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
