@@ -114,7 +114,7 @@ void flushBuffer() {
   SPIFFS.remove(BUFFER_FILE);
 }
 
-/* NTP time */
+/* NTP timer */
 const char* ntpServer = "pool.ntp.org";
 const long  gmtOffset_sec = 3600 * 1; // adjust to your timezone (WAT = +1)
 const int   daylightOffset_sec = 0;
@@ -130,7 +130,7 @@ String isoTimestamp() {
   return String(buf);
 }
 
-/* WiFi connect with backoff */
+/* WiFi connection with backoff */
 void connectWiFi() {
   if (WiFi.status() == WL_CONNECTED) return;
   Serial.printf("Connecting to WiFi %s\n", WIFI_SSID);
@@ -152,7 +152,7 @@ void connectWiFi() {
   }
 }
 
-/* MQTT connect with auth and backoff */
+/* MQTT connection with auth and backoff */
 void connectMQTT() {
   if (mqttClient.connected()) return;
   mqttClient.setServer(MQTT_BROKER, MQTT_PORT);
