@@ -14,30 +14,33 @@ router.get('/', authMiddleware, requireAnyRole(['admin', 'operator']), async (re
   }
 });
 
-// Cut power to specific equipment
+// Recommend cutoff for specific equipment without changing power state
 router.post('/:id/cutoff', authMiddleware, requireRole('operator'), async (req, res) => {
   const id = req.params.id;
   try {
-    const r = await pool.query(
-      'UPDATE grid_equipment SET status=$1, last_cutoff=NOW() WHERE id=$2 RETURNING *',
-      ['OFF', id]
-    );
-    if (r.rowCount === 0) return res.status(404).json({ error: 'Equipment not found' });
+    const equipmentRes = await pool.query('SELECT * FROM grid_equipment WHERE id=$1', [id]);
+    if (equipmentRes.rowCount === 0) return res.status(404).json({ error: 'Equipment not found' });
 
-    // Broadcast to dashboard
+    const updateRes = await pool.query(
+      'UPDATE grid_equipment SET recommended=$1 WHERE id=$2 RETURNING *',
+      [true, id]
+    );
+    const equipment = updateRes.rows[0];
+
+    // Broadcast recommendation to dashboard
     req.app.get('wss').clients.forEach(client => {
       if (client.readyState === 1) {
-        client.send(JSON.stringify({ type: 'grid_cutoff', equipment: r.rows[0] }));
+        client.send(JSON.stringify({ type: 'grid_recommendation', equipment, message: `Cutoff recommended for ${equipment.name}.` }));
       }
     });
 
     try {
-      await logAudit(id, req.user.id, 'CUTOFF', 'Manual cutoff executed');
+      await logAudit(id, req.user.id, 'RECOMMEND_CUTOFF', 'Manual cutoff recommendation issued');
     } catch (err) {
       console.error('Audit log error', err);
     }
 
-    res.json({ message: 'Power cutoff executed', equipment: r.rows[0] });
+    res.json({ message: 'Cutoff recommendation issued', equipment });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

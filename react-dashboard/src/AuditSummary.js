@@ -23,7 +23,7 @@ function AuditSummary({ token, role }) {
 
   const allowedActions = role === 'admin'
     ? [...new Set([...daily.map(row => row.action), ...weekly.map(row => row.action)])]
-    : ['CUTOFF', 'RESTORE', 'INSPECTION'];
+    : ['RECOMMEND_CUTOFF', 'CUTOFF', 'RESTORE', 'INSPECTION'];
 
   const dailyLabels = [...new Set(daily.map(row => row.day))];
   const dailyDatasets = allowedActions.map(action => ({

@@ -45,6 +45,7 @@ function AuditPanel({ token, role }) {
           style={{ marginRight: '8px' }}
         >
           <option value="">All Actions</option>
+          <option value="RECOMMEND_CUTOFF">Cutoff Recommendation</option>
           <option value="CUTOFF">Cutoff</option>
           <option value="RESTORE">Restore</option>
           <option value="INSPECTION">Inspection</option>

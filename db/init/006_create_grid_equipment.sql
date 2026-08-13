@@ -3,6 +3,7 @@ CREATE TABLE grid_equipment (
     name VARCHAR(100) NOT NULL,
     location GEOGRAPHY(POINT, 4326),
     status VARCHAR(20) DEFAULT 'ON',
+    recommended BOOLEAN DEFAULT FALSE,
     last_cutoff TIMESTAMP,
     description TEXT
 );

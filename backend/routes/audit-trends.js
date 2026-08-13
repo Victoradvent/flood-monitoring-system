@@ -36,8 +36,8 @@ router.get('/weekly-trends', authMiddleware, requireRole('admin'), async (req, r
     });
 
     const alerts = trends
-      .filter(t => t.action === 'CUTOFF' && t.currentCount > 50)
-      .map(t => `ALERT: ${t.currentCount} cutoffs this week (threshold exceeded)`);
+      .filter(t => ['CUTOFF', 'RECOMMEND_CUTOFF'].includes(t.action) && t.currentCount > 50)
+      .map(t => `ALERT: ${t.currentCount} ${t.action === 'CUTOFF' ? 'cutoffs' : 'cutoff recommendations'} this week (threshold exceeded)`);
 
     res.json({ currentWeek, prevWeek, trends, alerts });
   } catch (err) {

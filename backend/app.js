@@ -9,7 +9,6 @@ const Twilio = require('twilio');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcrypt');
 const gridControl = require('./routes/grid-control');
-const gridInspection = require('./routes/grid-inspection');
 const auditRoutes = require('./routes/audit');
 const auditSummary = require('./routes/audit-summary');
 const auditTrends = require('./routes/audit-trends');
@@ -38,15 +37,12 @@ const twilioClient = (TWILIO_ACCOUNT_SID && TWILIO_AUTH_TOKEN)
 
 // In-memory cooldown map: { "<node_id>::<level>": timestamp }
 const cooldownMap = new Map();
-const hazardTimers = {};
-const inspectionNotified = new Set();
 
 // WebSocket server for dashboard
 const app = express();
 const server = require('http').createServer(app);
 const wss = new WebSocket.Server({ server });
 app.set('wss', wss);
-app.set('inspectionNotified', inspectionNotified);
 app.use(express.json());
 
 // Broadcast helper
@@ -61,7 +57,6 @@ function broadcast(obj) {
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
 
 app.use('/grid', gridControl);
-app.use('/inspection', gridInspection);
 app.use('/audit', auditRoutes);
 app.use('/audit-summary', auditSummary);
 app.use('/audit-trends', auditTrends);
@@ -343,40 +338,6 @@ function setCooldown(node_id, level) {
   cooldownMap.set(key, Date.now());
 }
 
-function clearHazardTimer(equipmentId) {
-  if (hazardTimers[equipmentId]) {
-    clearTimeout(hazardTimers[equipmentId]);
-    delete hazardTimers[equipmentId];
-  }
-}
-
-function clearHazardTimer(equipmentId) {
-  if (hazardTimers[equipmentId]) {
-    clearTimeout(hazardTimers[equipmentId]);
-    delete hazardTimers[equipmentId];
-  }
-}
-
-async function clearNearbyHazardTimers(nodeId) {
-  try {
-    const q = `SELECT ge.id
-               FROM grid_equipment ge
-               LEFT JOIN nodes n ON n.node_id = $1
-               WHERE ge.location IS NOT NULL
-                 AND n.lat IS NOT NULL
-                 AND n.lng IS NOT NULL
-                 AND ST_DWithin(
-                   ge.location,
-                   ST_SetSRID(ST_MakePoint(n.lng, n.lat), 4326)::geography,
-                   1000
-                 )`;
-    const r = await pool.query(q, [nodeId]);
-    r.rows.forEach((row) => clearHazardTimer(row.id));
-  } catch (err) {
-    console.error('clearNearbyHazardTimers error', err);
-  }
-}
-
 async function maybeTriggerGridHazard(payload) {
   try {
     const nodeId = payload.node_id;
@@ -400,54 +361,20 @@ async function maybeTriggerGridHazard(payload) {
 
     if (r.rowCount === 0) return;
 
-    const equipment = r.rows[0];
-    const message = `Flood detected near ${equipment.name}. Cutoff recommended.`;
+    const updateRes = await pool.query(
+      'UPDATE grid_equipment SET recommended=$1 WHERE id=$2 RETURNING *',
+      [true, equipment.id]
+    );
+    const recommendedEquipment = updateRes.rows[0];
+    const message = `Flood detected near ${recommendedEquipment.name}. Cutoff recommended.`;
 
     broadcast({
-      type: 'grid_hazard',
+      type: 'grid_recommendation',
       message,
-      equipment,
+      equipment: recommendedEquipment,
       node_id: nodeId,
       severity: level
     });
-
-    if (equipment.status === 'OFF') {
-      clearHazardTimer(equipment.id);
-      return;
-    }
-
-    if (!hazardTimers[equipment.id]) {
-      hazardTimers[equipment.id] = setTimeout(async () => {
-        try {
-          const latest = await pool.query(
-            'SELECT water_level_cm FROM readings WHERE node_id=$1 ORDER BY timestamp DESC LIMIT 1',
-            [nodeId]
-          );
-
-          if (!latest.rows[0]) return;
-          if (latest.rows[0].water_level_cm > 80) {
-            const current = await pool.query('SELECT status FROM grid_equipment WHERE id=$1', [equipment.id]);
-            if (current.rowCount === 0 || current.rows[0].status !== 'ON') return;
-
-            const cutoffRes = await pool.query(
-              'UPDATE grid_equipment SET status=$1, last_cutoff=NOW() WHERE id=$2 RETURNING *',
-              ['OFF', equipment.id]
-            );
-            if (cutoffRes.rowCount > 0) {
-              broadcast({
-                type: 'grid_cutoff',
-                message: `Auto-cutoff executed for ${cutoffRes.rows[0].name}`,
-                equipment: cutoffRes.rows[0]
-              });
-            }
-          }
-        } catch (err) {
-          console.error('Hazard timer callback error', err);
-        } finally {
-          delete hazardTimers[equipment.id];
-        }
-      }, 5 * 60 * 1000);
-    }
   } catch (err) {
     console.error('Grid hazard detection error', err);
   }
@@ -577,34 +504,6 @@ client.on('message', async (topic, message) => {
     if (payload.status === 'WARNING' || payload.status === 'CRITICAL') {
       await handleAlert(payload);
       await maybeTriggerGridHazard(payload);
-    } else if (payload.status === 'OK') {
-      await clearNearbyHazardTimers(payload.node_id);
-
-      const gridRes = await pool.query(
-        `SELECT ge.*
-         FROM grid_equipment ge
-         LEFT JOIN nodes n ON n.node_id = $1
-         WHERE ge.status = $2
-           AND ge.last_cutoff IS NOT NULL
-           AND ge.location IS NOT NULL
-           AND n.lat IS NOT NULL
-           AND n.lng IS NOT NULL
-           AND ST_DWithin(
-             ge.location,
-             ST_SetSRID(ST_MakePoint(n.lng, n.lat), 4326)::geography,
-             1000
-           )`,
-        [payload.node_id, 'OFF']
-      );
-      for (const eq of gridRes.rows) {
-        if (inspectionNotified.has(eq.id)) continue;
-        inspectionNotified.add(eq.id);
-        broadcast({
-          type: 'inspection_required',
-          message: `Flood subsided near ${eq.name}. Inspection required before restoring power.`,
-          equipment: eq
-        });
-      }
     }
   } catch (err) {
     console.error('Processing error', err);

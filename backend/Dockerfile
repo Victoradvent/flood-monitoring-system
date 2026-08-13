@@ -2,17 +2,23 @@
 FROM node:18-alpine
 
 # Create app directory
-WORKDIR /usr/src/app
+WORKDIR /app
 
-# Install dependencies
-COPY backend/package*.json ./
-RUN npm ci --only=production
+# Copy package files
+COPY package*.json ./
 
-# Copy app source
-COPY backend/ ./
+# Install production dependencies only
+RUN npm ci --only=production && npm cache clean --force
+
+# Copy application code
+COPY . .
 
 # Expose port
 EXPOSE 3000
 
-# Start the app
+# Health check
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD node -e "require('http').get('http://localhost:3000/health', (r) => {if (r.statusCode !== 200) throw new Error(r.statusCode)})"
+
+# Start application
 CMD ["node", "app.js"]

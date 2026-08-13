@@ -21,6 +21,8 @@ function GridPanel({ token, role }) {
     }
   }, [token]);
 
+  const recommendedEquipment = equipment.filter(item => item.recommended);
+
   useEffect(() => {
     if (!token) return undefined;
 
@@ -28,20 +30,11 @@ function GridPanel({ token, role }) {
     ws.onmessage = (event) => {
       try {
         const msg = JSON.parse(event.data);
-        if (msg.type === 'grid_hazard') {
+        if (msg.type === 'grid_hazard' || msg.type === 'grid_recommendation') {
           alert(msg.message);
         }
-        if (msg.type === 'grid_cutoff') {
-          alert(msg.message);
-          setEquipment((prev) => prev.map((eq) => eq.id === msg.equipment.id ? msg.equipment : eq));
-        }
-        if (msg.type === 'inspection_required') {
-          alert(msg.message);
-          setEquipment((prev) => prev.map((eq) => eq.id === msg.equipment.id ? msg.equipment : eq));
-        }
-        if (msg.type === 'inspection_complete') {
-          alert(msg.message);
-          setEquipment((prev) => prev.map((eq) => eq.id === msg.equipment.id ? msg.equipment : eq));
+        if (msg.type === 'grid_recommendation' && msg.equipment) {
+          setEquipment(prev => prev.map(eq => eq.id === msg.equipment.id ? msg.equipment : eq));
         }
       } catch (err) {
         console.error('WebSocket message error', err);
@@ -56,7 +49,7 @@ function GridPanel({ token, role }) {
     };
   }, [token]);
 
-  const cutPower = async (id) => {
+  const recommendCutoff = async (id) => {
     try {
       const res = await axios.post(`/grid/${id}/cutoff`, {}, {
         headers: { Authorization: `Bearer ${token}` }
@@ -64,25 +57,27 @@ function GridPanel({ token, role }) {
       alert(res.data.message);
       setEquipment((prev) => prev.map((eq) => (eq.id === id ? res.data.equipment : eq)));
     } catch (err) {
-      console.error('Cutoff error', err);
-    }
-  };
-
-  const restorePower = async (id) => {
-    try {
-      const res = await axios.post(`/grid/${id}/restore`, {}, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      alert(res.data.message);
-      setEquipment((prev) => prev.map((eq) => (eq.id === id ? res.data.equipment : eq)));
-    } catch (err) {
-      console.error('Restore error', err);
+      console.error('Recommendation error', err);
     }
   };
 
   return (
     <div className="grid-panel">
-      <h3>Grid Equipment Control</h3>
+      <h3>Grid Equipment Monitoring</h3>
+
+      {recommendedEquipment.length > 0 && (
+        <div style={{ marginBottom: '16px', padding: '12px', border: '1px solid #f5c2c7', background: '#fff1f0' }}>
+          <h4>Recommended Cutoff Actions</h4>
+          <ul style={{ margin: 0, paddingLeft: '18px' }}>
+            {recommendedEquipment.map(item => (
+              <li key={item.id}>
+                <strong>{item.name}</strong> — {item.status || 'ON'}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
       {equipment.length === 0 ? (
         <p>No equipment found.</p>
       ) : (
@@ -91,34 +86,13 @@ function GridPanel({ token, role }) {
             <li key={item.id} style={{ marginBottom: '8px' }}>
               <strong>{item.name}</strong> — {item.status || 'ON'}
               <div style={{ marginTop: '4px' }}>
-                <button onClick={() => cutPower(item.id)} style={{ marginRight: '8px' }}>
-                  Cut Power
+                <button onClick={() => recommendCutoff(item.id)} style={{ marginRight: '8px' }}>
+                  Recommend Cutoff
                 </button>
-                <button onClick={() => restorePower(item.id)}>
-                  Restore Power
-                </button>
-                {['admin', 'operator'].includes(role) && item.status === 'OFF' && (
-                  <button
-                    onClick={async () => {
-                      const notes = prompt('Enter inspection notes:');
-                      if (notes === null) return;
-                      try {
-                        const res = await axios.post(
-                          `/inspection/${item.id}/inspect`,
-                          { notes },
-                          { headers: { Authorization: `Bearer ${token}` } }
-                        );
-                        alert(res.data.message);
-                        setEquipment((prev) => prev.map((eq) => (eq.id === item.id ? res.data.equipment : eq)));
-                      } catch (err) {
-                        console.error('Inspection error', err);
-                        alert(err.response?.data?.error || 'Inspection failed');
-                      }
-                    }}
-                    style={{ marginLeft: '8px' }}
-                  >
-                    Confirm Inspection & Restore Power
-                  </button>
+                {item.recommended && (
+                  <span style={{ marginLeft: '12px', color: '#b33', fontWeight: 'bold' }}>
+                    Cutoff recommended
+                  </span>
                 )}
               </div>
             </li>
