@@ -34,13 +34,25 @@ docker-compose up
 
 ### Production Deployment
 
-**See [DEPLOYMENT.md](./DEPLOYMENT.md) for complete production guide using:**
-- GitHub Student Developer Pack (free credits)
-- DigitalOcean App Platform
-- Managed PostgreSQL database
-- Automatic HTTPS/SSL
+**Choose your deployment platform:**
 
-**Cost:** $0 for 1-2 years (covered by free credits)
+#### Option A: DigitalOcean (Easiest - 5 min)
+- Free via GitHub Student Developer Pack ($50-100 credits)
+- Visual dashboard, click-to-deploy
+- Best for: Quick deployment, beginners
+- Cost: FREE for 1-2 years, ~$20-30/mo after
+- **See [QUICKSTART.md](./QUICKSTART.md)** for quick setup
+- **See [DEPLOYMENT.md](./DEPLOYMENT.md)** for complete guide
+
+#### Option B: Oracle Cloud (Best Value - 30 min)
+- Truly FREE forever (always-free tier, no expiration)
+- Linux VM + PostgreSQL database included
+- Best for: Long-term hosting, learning, cost-conscious
+- Cost: $0 forever (no credit card required)
+- **See [QUICKSTART_ORACLE.md](./QUICKSTART_ORACLE.md)** for quick setup
+- **See [DEPLOYMENT_ORACLE.md](./DEPLOYMENT_ORACLE.md)** for complete guide
+
+**Not sure which one?** See [DEPLOYMENT_COMPARISON.md](./DEPLOYMENT_COMPARISON.md) for side-by-side comparison.
 
 ## Project Structure
 
