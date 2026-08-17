@@ -8,7 +8,7 @@ CREATE TABLE nodes (
   created_at TIMESTAMP WITH TIME ZONE DEFAULT now()
 );
 
--- Example inserts
+--  inserts
 INSERT INTO nodes (node_id, name, lat, lng, description)
 VALUES
   ('NODE001', 'Transformer near Awka North', 6.2100, 7.0700, 'Critical transformer prone to flooding'),

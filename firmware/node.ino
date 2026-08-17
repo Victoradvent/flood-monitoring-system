@@ -41,11 +41,15 @@ const int PIN_ECHO = 12;
 /* Battery monitor analog pin */
 const int PIN_BATT = 35;
 
-/* Sampling and thresholds (cm) */
+/* SENSOR CALIBRATION: Distance from sensor mount point to bottom (cm) */
+/* This is CRITICAL for correct water depth calculation */
+const float SENSOR_HEIGHT_CM = 100.0; // *** ADJUST THIS TO YOUR SENSOR MOUNTING HEIGHT ***
+
+/* Sampling and thresholds (cm) - these are WATER DEPTH, not sensor distance */
 const unsigned long SAMPLE_INTERVAL_MS = 10000; // 10s
-const float WARNING_LEVEL_CM = 30.0;
-const float CRITICAL_LEVEL_CM = 50.0;
-const float HYSTERESIS_CM = 3.0;
+const float WARNING_LEVEL_CM = 30.0;   // Water depth >= 30 cm triggers WARNING
+const float CRITICAL_LEVEL_CM = 50.0;  // Water depth >= 50 cm triggers CRITICAL
+const float HYSTERESIS_CM = 3.0;       // Hysteresis for threshold crossing
 
 /* Filtering */
 const int FILTER_WINDOW = 5;
@@ -190,6 +194,28 @@ float durationToCm(unsigned long durationUs) {
   return (durationUs / 29.1) / 2.0;
 }
 
+/* Convert ultrasonic distance to water depth
+   CRITICAL FIX: Sensor measures distance TO water surface, not depth FROM bottom
+   Actual water depth = SENSOR_HEIGHT_CM - measured_distance_from_sensor
+*/
+float distanceToWaterDepth(float sensorDistanceCm) {
+  if (sensorDistanceCm < 0) return -1.0; // invalid reading
+  float depth = SENSOR_HEIGHT_CM - sensorDistanceCm;
+  
+  // Sanity checks
+  if (depth < 0) {
+    Serial.printf("Warning: measured distance %.1f > sensor height %.1f (object too close?)\n", 
+                  sensorDistanceCm, SENSOR_HEIGHT_CM);
+    return -1.0; // invalid: obstacle below sensor
+  }
+  if (depth > SENSOR_HEIGHT_CM) {
+    Serial.printf("Warning: calculated depth %.1f > sensor height %.1f\n", 
+                  depth, SENSOR_HEIGHT_CM);
+    return -1.0; // invalid: sensor not detecting water
+  }
+  return depth;
+}
+
 float readBatteryVoltage() {
   int raw = analogRead(PIN_BATT);
   float v = (raw / 4095.0) * 3.3 * 2.0; // adjust divider ratio if different
@@ -205,22 +231,23 @@ float filteredReading(float newVal) {
   return sum / filterCount;
 }
 
-NodeStatus evaluateStatus(float levelCm) {
+NodeStatus evaluateStatus(float waterDepthCm) {
+  /* Thresholds are now applied to ACTUAL WATER DEPTH, not sensor distance */
   if (currentStatus == CRITICAL) {
-    if (levelCm < (CRITICAL_LEVEL_CM - HYSTERESIS_CM)) {
-      if (levelCm < (WARNING_LEVEL_CM - HYSTERESIS_CM)) return OK;
+    if (waterDepthCm < (CRITICAL_LEVEL_CM - HYSTERESIS_CM)) {
+      if (waterDepthCm < (WARNING_LEVEL_CM - HYSTERESIS_CM)) return OK;
       return WARNING;
     }
     return CRITICAL;
   }
   if (currentStatus == WARNING) {
-    if (levelCm >= CRITICAL_LEVEL_CM) return CRITICAL;
-    if (levelCm < (WARNING_LEVEL_CM - HYSTERESIS_CM)) return OK;
+    if (waterDepthCm >= CRITICAL_LEVEL_CM) return CRITICAL;
+    if (waterDepthCm < (WARNING_LEVEL_CM - HYSTERESIS_CM)) return OK;
     return WARNING;
   }
-  // OK
-  if (levelCm >= CRITICAL_LEVEL_CM) return CRITICAL;
-  if (levelCm >= WARNING_LEVEL_CM) return WARNING;
+  // Currently OK
+  if (waterDepthCm >= CRITICAL_LEVEL_CM) return CRITICAL;
+  if (waterDepthCm >= WARNING_LEVEL_CM) return WARNING;
   return OK;
 }
 
@@ -296,18 +323,27 @@ void loop() {
     lastSampleTime = now;
 
     unsigned long dur = pingUltrasonic();
-    float levelCm = durationToCm(dur);
-    if (levelCm < 0) {
-      Serial.println("Ultrasonic timeout");
-      continue;
+    float sensorDistance = durationToCm(dur);
+    if (sensorDistance < 0) {
+      Serial.println("Ultrasonic timeout or error");
+      return;
     }
 
-    float filtered = filteredReading(levelCm);
+    /* CRITICAL: Convert sensor distance to actual water depth */
+    float waterDepth = distanceToWaterDepth(sensorDistance);
+    if (waterDepth < 0) {
+      Serial.println("Invalid water depth reading (out of range)");
+      return;
+    }
+
+    Serial.printf("Sensor distance: %.1f cm, Water depth: %.1f cm\n", sensorDistance, waterDepth);
+
+    float filtered = filteredReading(waterDepth);
     float batt = readBatteryVoltage();
 
     NodeStatus newStatus = evaluateStatus(filtered);
     if (newStatus != currentStatus) {
-      Serial.printf("Status changed %d -> %d\n", currentStatus, newStatus);
+      Serial.printf("Status changed %d -> %d (depth: %.1f cm)\n", currentStatus, newStatus, filtered);
       currentStatus = newStatus;
       // Optionally: immediate publish and backend will trigger SMS
     }

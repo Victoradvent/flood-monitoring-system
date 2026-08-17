@@ -1,17 +1,27 @@
 // app.js - Node.js MQTT subscriber + alert handler
 require('dotenv').config();
 const mqtt = require('mqtt');
-const { Pool } = require('pg');
 const express = require('express');
 const WebSocket = require('ws');
 const axios = require('axios');
 const Twilio = require('twilio');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcrypt');
+
+// Shared modules
+const pool = require('./db');
+const { authenticateToken, requireRole, requireAnyRole } = require('./auth');
+
+// Route modules
 const gridControl = require('./routes/grid-control');
 const auditRoutes = require('./routes/audit');
 const auditSummary = require('./routes/audit-summary');
 const auditTrends = require('./routes/audit-trends');
+const alertRoutes = require('./routes/alerts');
+const nodeRoutes = require('./routes/nodes');
+const reportsRoutes = require('./routes/reports');
+const gridInspection = require('./routes/grid-inspection');
+const subscribersRoutes = require('./routes/subscribers-admin');
 
 // Config
 const {
@@ -22,13 +32,12 @@ const {
   ALERT_COOLDOWN_SEC = 900, PORT = 3000
 } = process.env;
 
-const SECRET = process.env.JWT_SECRET || 'supersecret';
+const SECRET = process.env.JWT_SECRET;
+if (!SECRET) {
+  console.error('FATAL: JWT_SECRET environment variable is required');
+  process.exit(1);
+}
 const mqttUrl = `mqtt://${MQTT_BROKER}:${MQTT_PORT}`;
-
-// Postgres pool
-const pool = new Pool({
-  host: PG_HOST, port: PG_PORT, user: PG_USER, password: PG_PASS, database: PG_DB
-});
 
 // Twilio client (if configured)
 const twilioClient = (TWILIO_ACCOUNT_SID && TWILIO_AUTH_TOKEN)
@@ -56,10 +65,16 @@ function broadcast(obj) {
 // Simple health endpoint
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
 
+// Mount all routes
 app.use('/grid', gridControl);
 app.use('/audit', auditRoutes);
 app.use('/audit-summary', auditSummary);
 app.use('/audit-trends', auditTrends);
+app.use('/alerts', alertRoutes);
+app.use('/nodes', nodeRoutes);
+app.use('/reports', reportsRoutes);
+app.use('/grid-inspection', gridInspection);
+app.use('/subscribers', subscribersRoutes);
 
 app.post('/login', express.json(), async (req, res) => {
   const { username, password } = req.body;
@@ -78,30 +93,6 @@ app.post('/login', express.json(), async (req, res) => {
   res.json({ token });
 });
 
-function authMiddleware(req, res, next) {
-  const header = req.headers['authorization'];
-  if (!header) return res.status(401).json({ error: 'missing token' });
-
-  const token = header.split(' ')[1];
-  try {
-    const decoded = jwt.verify(token, SECRET);
-    req.user = decoded;
-    next();
-  } catch (err) {
-    return res.status(401).json({ error: 'invalid token' });
-  }
-}
-
-function requireRole(requiredRole) {
-  return (req, res, next) => {
-    if (!req.user) return res.status(401).json({ error: 'unauthorized' });
-    if (req.user.role !== requiredRole) {
-      return res.status(403).json({ error: 'forbidden' });
-    }
-    next();
-  };
-}
-
 app.get('/history', async (req, res) => {
   const node = req.query.node;
   const limit = Math.min(parseInt(req.query.limit || '50', 10), 500);
@@ -118,54 +109,9 @@ app.get('/history', async (req, res) => {
 });
 
 // List nodes
-app.get('/nodes', async (req, res) => {
-  try {
-    const r = await pool.query('SELECT * FROM nodes ORDER BY node_id');
-    res.json(r.rows);
-  } catch (err) {
-    console.error('Node list error', err);
-    res.status(500).json({ error: 'internal' });
-  }
-});
+// Note: Node CRUD operations are now in routes/nodes.js
 
-// Add or update node
-app.post('/nodes', authMiddleware, requireRole('admin'), express.json(), async (req, res) => {
-  const { node_id, name, lat, lng, description } = req.body;
-  if (!node_id) return res.status(400).json({ error: 'node_id required' });
-
-  try {
-    const q = `INSERT INTO nodes (node_id, name, lat, lng, description)
-               VALUES ($1,$2,$3,$4,$5)
-               ON CONFLICT (node_id) DO UPDATE SET
-                 name = EXCLUDED.name,
-                 lat = EXCLUDED.lat,
-                 lng = EXCLUDED.lng,
-                 description = EXCLUDED.description
-               RETURNING *`;
-    const vals = [node_id, name || null, lat || null, lng || null, description || null];
-    const r = await pool.query(q, vals);
-    res.json(r.rows[0]);
-  } catch (err) {
-    console.error('Node upsert error', err);
-    res.status(500).json({ error: 'internal' });
-  }
-});
-
-// Delete node
-app.delete('/nodes/:node_id', authMiddleware, requireRole('admin'), async (req, res) => {
-  const node_id = req.params.node_id;
-
-  try {
-    const r = await pool.query('DELETE FROM nodes WHERE node_id = $1 RETURNING *', [node_id]);
-    if (r.rowCount === 0) return res.status(404).json({ error: 'not found' });
-    res.json(r.rows[0]);
-  } catch (err) {
-    console.error('Node delete error', err);
-    res.status(500).json({ error: 'internal' });
-  }
-});
-
-app.post('/alerts/:id/ack', authMiddleware, requireRole('operator'), async (req, res) => {
+app.post('/alerts/:id/ack', authenticateToken, requireRole('operator'), async (req, res) => {
   const alertId = req.params.id;
 
   try {
@@ -182,6 +128,8 @@ app.post('/alerts/:id/ack', authMiddleware, requireRole('operator'), async (req,
     res.status(500).json({ error: 'internal' });
   }
 });
+
+// Note: Alert acknowledgement is also available in routes/alerts.js
 
 app.post('/alert-events', authMiddleware, async (req, res) => {
   const { alert_id, event_type } = req.body;
@@ -361,6 +309,7 @@ async function maybeTriggerGridHazard(payload) {
 
     if (r.rowCount === 0) return;
 
+    const equipment = r.rows[0];
     const updateRes = await pool.query(
       'UPDATE grid_equipment SET recommended=$1 WHERE id=$2 RETURNING *',
       [true, equipment.id]
@@ -420,11 +369,22 @@ async function handleAlert(payload) {
     return;
   }
 
-  // Compose message and recipients (example: static list or lookup)
-  // For prototype, use a configured list or a DB table of subscribers (not implemented here)
-  const recipients = [
-    '+2348000000000' // replace with real numbers or lookup per node
-  ];
+  // Lookup subscribers from database 
+  let recipients = [];
+  try {
+    const subQuery = `SELECT phone FROM subscribers WHERE node_id = $1 AND active = TRUE AND role IN ('operator', 'resident')`;
+    const subResult = await pool.query(subQuery, [node]);
+    recipients = subResult.rows.map(r => r.phone);
+  } catch (err) {
+    console.error('Subscriber lookup error', err);
+  }
+
+  // If no subscribers found, log it but don't fail - alert is recorded in database
+  if (recipients.length === 0) {
+    console.log(`No active subscribers for node ${node}, but alert is recorded in database`);
+    // Optionally set a default operator phone here for testing
+    // recipients = [process.env.DEFAULT_ALERT_PHONE];
+  }
 
   const body = composeAlertMessage(node, level, levelValue, ts);
 
