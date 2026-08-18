@@ -8,14 +8,11 @@ const Twilio = require('twilio');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcrypt');
 const cors = require('cors');
-
- authMiddleware,
-  requireAnyRole(['admin', 'operator']), 
-  const {authenticateToken, authMiddleware, requireRole, requireAnyRole} = require('./auth');
+const { logAudit } = require('./utils/audit');
+const { authenticateToken, authMiddleware, requireRole, requireAnyRole} = require('./auth');
 
 // Shared modules
 const pool = require('./db');
-const { authenticateToken, authMiddleware, requireRole } = require('./auth');
 
 // Route modules
 const gridControl = require('./routes/grid-control');
@@ -69,7 +66,7 @@ function broadcast(obj) {
 }
 
 // Simple health endpoint
-app.get('/health', (req, res) => res.json({ status: 'ok' }));
+app.get('/health', (req, res) => res.json({ status: 'NORMAL' }));
 
 // Mount all routes
 app.use('/grid', gridControl);
@@ -245,18 +242,39 @@ function parsePayload(msg) {
 async function saveReading(payload, raw) {
   const q = `INSERT INTO readings (node_id, timestamp, water_level_cm, battery_v, status, raw_payload)
              VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`;
-  const vals = [payload.node_id, payload.timestamp, payload.water_level_cm, payload.battery_v || null, payload.status || 'OK', raw];
+  const vals = [payload.node_id, payload.timestamp, payload.water_level_cm, payload.battery_v || null, payload.status || 'NORMAL', raw];
   const res = await pool.query(q, vals);
   return res.rows[0].id;
 }
 
 // Insert alert record
-async function saveAlert(node_id, level) {
-  const q = `INSERT INTO alerts (node_id, alert_level, sent, provider, provider_response)
-             VALUES ($1,$2,$3,$4,$5) RETURNING id`;
-  const vals = [node_id, level, false, null, null];
-  const res = await pool.query(q, vals);
-  return res.rows[0].id;
+async function saveAlert(
+  node_id,
+  level,
+  waterLevelCm
+) {
+  const q = `INSERT INTO alerts (
+      node_id,
+      alert_level,
+      water_level_cm,
+      sent,
+      provider,
+      provider_response )
+    VALUES ($1, $2, $3, $4, $5, $6)
+    RETURNING id`;
+
+  const values = [
+    node_id,
+    level,
+    waterLevelCm,
+    false,
+    null,
+    null
+  ];
+
+  const result = await pool.query(q, values);
+
+  return result.rows[0].id;
 }
 
 // Check cooldown
@@ -275,42 +293,88 @@ function setCooldown(node_id, level) {
 async function maybeTriggerGridHazard(payload) {
   try {
     const nodeId = payload.node_id;
-    const level = payload.status || 'CRITICAL';
-    if (level !== 'CRITICAL') return;
 
-    const q = `SELECT ge.*
-               FROM grid_equipment ge
-               LEFT JOIN nodes n ON n.node_id = $1
-               WHERE ge.location IS NOT NULL
-                 AND n.lat IS NOT NULL
-                 AND n.lng IS NOT NULL
-                 AND ST_DWithin(
-                   ge.location,
-                   ST_SetSRID(ST_MakePoint(n.lng, n.lat), 4326)::geography,
-                   1000
-                 )
-               AND ge.status = 'NORMAL' `;
-    const r = await pool.query(q, [nodeId]);
+    if (payload.status !== 'CRITICAL') {
+      return;
+    }
 
-    if (r.rowCount === 0) return;
+    const query = `
+      SELECT
+        ge.*
+      FROM grid_equipment ge
+      JOIN nodes n
+        ON n.node_id = $1
+      WHERE
+        ge.location IS NOT NULL
+        AND n.lat IS NOT NULL
+        AND n.lng IS NOT NULL
+        AND ge.status = 'NORMAL'
+        AND ST_DWithin(
+          ge.location,
+          ST_SetSRID(
+            ST_MakePoint(n.lng, n.lat),
+            4326
+          )::geography,
+          1000
+        )
+    `;
 
-    const equipment = r.rows[0];
-    const updateRes = await pool.query(
-      'UPDATE grid_equipment SET recommended=$1 WHERE id=$2 RETURNING *',
-      [true, equipment.id]
+    const result = await pool.query(
+      query,
+      [nodeId]
     );
-    const recommendedEquipment = updateRes.rows[0];
-    const message = `Flood detected near ${recommendedEquipment.name}. Cutoff recommended.`;
 
-    broadcast({
-      type: 'grid_recommendation',
-      message,
-      equipment: recommendedEquipment,
-      node_id: nodeId,
-      severity: level
-    });
+    for (const equipment of result.rows) {
+      const updateResult = await pool.query(
+        `
+        UPDATE grid_equipment
+        SET
+          recommended = TRUE,
+          status = 'CUTOFF_RECOMMENDED',
+          recommended_at = NOW()
+        WHERE id = $1
+        RETURNING *
+        `,
+        [equipment.id]
+      );
+
+      const recommended =
+        updateResult.rows[0];
+
+      const message =
+        `Flood detected near ` +
+        `${recommended.name}. ` +
+        `Cutoff recommended.`;
+
+      try {
+        await logAudit(
+          recommended.id,
+          null,
+          'AUTO_RECOMMEND_CUTOFF',
+          `Automatic cutoff recommendation generated because ${nodeId} reached CRITICAL flood level.`,
+          message
+        );
+      } catch (auditError) {
+        console.error(
+          'Automatic recommendation audit error',
+          auditError
+        );
+      }
+
+      broadcast({
+        type: 'grid_recommendation',
+        message: `Flood detected near ${recommended.name}. Cutoff recommended.`,
+        equipment: recommended,
+        node_id: nodeId,
+        severity: 'CRITICAL',
+        automatic: true
+      });
+    }
   } catch (err) {
-    console.error('Grid hazard detection error', err);
+    console.error(
+      'Grid hazard detection error',
+      err
+    );
   }
 }
 
@@ -373,7 +437,7 @@ async function handleAlert(payload) {
 
   const body = composeAlertMessage(node, level, levelValue, ts);
 
-  const alertId = await saveAlert(node, level);
+  const alertId = await saveAlert(node, level, levelValue);
   let sentCount = 0;
   let provider = null;
   let providerResp = null;
@@ -423,14 +487,7 @@ async function handleAlert(payload) {
 }
 
 // Server-side threshold evaluation (optional redundancy)
-function serverEvaluateStatus(payload, warningLevel = 30.0, criticalLevel = 50.0, hysteresis = 3.0) {
-  // Use payload.status if provided; otherwise compute
-  if (payload.status && ['OK','WARNING','CRITICAL'].includes(payload.status)) return payload.status;
-  const v = payload.water_level_cm;
-  if (v >= criticalLevel) return 'CRITICAL';
-  if (v >= warningLevel) return 'WARNING';
-  return 'OK';
-}
+
 
 // MQTT message handler
 client.on('message', async (topic, message) => {

@@ -22,7 +22,7 @@ router.get('/', authMiddleware, requireAnyRole(['admin', 'operator']), async (re
 // Filtered audit logs (JSON)
 router.get('/filter', authMiddleware, requireAnyRole(['admin', 'operator']), async (req, res) => {
   const { start, end, operator, action } = req.query;
-  const operatorId = req.user.id;
+  const operatorId = req.user.user_id;
 
   try {
     await logAudit(null, operatorId, 'REPORT_VIEW', `Viewed logs with filters: start=${start}, end=${end}, operator=${operator}, action=${action}`);
@@ -69,7 +69,7 @@ router.get('/filter', authMiddleware, requireAnyRole(['admin', 'operator']), asy
 // Export audit logs as CSV
 router.get('/export/csv', authMiddleware, requireRole('admin'), async (req, res) => {
   const { start, end, operator, action } = req.query;
-  const operatorId = req.user.id;
+  const operatorId = req.user.user_id;
 
   try {
     await logAudit(null, operatorId, 'REPORT_EXPORT', `Exported logs with filters: start=${start}, end=${end}, operator=${operator}, action=${action}`);

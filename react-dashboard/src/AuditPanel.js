@@ -68,7 +68,7 @@ function AuditPanel({ token, role }) {
                 }
               );
 
-              if (!response.ok) {
+              if (!response.NORMAL) {
                 throw new Error('CSV export failed');
               }
 

@@ -33,13 +33,22 @@ services:
     build: ./backend
     container_name: flood_backend
     restart: always
-    env_file: .env
-  environment:
-    DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
-    PG_HOST: db
-    MQTT_BROKER: mqtt
-    MQTT_PORT: 1883
-    MQTT_TOPIC: nodes/flood
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      PG_HOST: db
+      PG_PORT: 5432
+      PG_USER: ${POSTGRES_USER}
+      PG_PASS: ${POSTGRES_PASSWORD}
+      PG_DB: ${POSTGRES_DB}
+      MQTT_BROKER: mqtt
+      MQTT_PORT: 1883
+      MQTT_USER: ${MQTT_USER}
+      MQTT_PASS: ${MQTT_PASS}
+      MQTT_TOPIC: nodes/flood
+      JWT_SECRET: ${JWT_SECRET}
+      PORT: 3000
     depends_on:
       - db
       - mqtt

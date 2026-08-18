@@ -27,7 +27,7 @@ const char* WIFI_SSID = "YOUR_WIFI_SSID";
 const char* WIFI_PASS = "YOUR_WIFI_PASSWORD";
 
 /* MQTT */
-const char* MQTT_BROKER = "192.168.01.100;
+const char* MQTT_BROKER = "192.168.01.100";
 const uint16_t MQTT_PORT = 1883;
 const char* MQTT_USER = "mqtt_user";
 const char* MQTT_PASS = "mqtt_password";
@@ -66,8 +66,8 @@ float filterBuffer[FILTER_WINDOW];
 int filterIndex = 0;
 int filterCount = 0;
 
-enum NodeStatus { OK, WARNING, CRITICAL };
-NodeStatus currentStatus = OK;
+enum NodeStatus { NORMAL, WARNING, CRITICAL };
+NodeStatus currentStatus = NORMAL;
 
 // Reconnection backoff
 unsigned long wifiBackoff = 1000;
@@ -102,8 +102,8 @@ void flushBuffer() {
     line.trim();
     if (line.length() == 0) continue;
     if (mqttClient.connected()) {
-      bool ok = mqttClient.publish(MQTT_TOPIC, line.c_str());
-      if (!ok) {
+      bool NORMAL = mqttClient.publish(MQTT_TOPIC, line.c_str());
+      if (!NORMAL) {
         // stop trying further; keep remaining lines
         f.close();
         return;
@@ -235,20 +235,20 @@ NodeStatus evaluateStatus(float waterDepthCm) {
   /* Thresholds are now applied to ACTUAL WATER DEPTH, not sensor distance */
   if (currentStatus == CRITICAL) {
     if (waterDepthCm < (CRITICAL_LEVEL_CM - HYSTERESIS_CM)) {
-      if (waterDepthCm < (WARNING_LEVEL_CM - HYSTERESIS_CM)) return OK;
+      if (waterDepthCm < (WARNING_LEVEL_CM - HYSTERESIS_CM)) return NORMAL;
       return WARNING;
     }
     return CRITICAL;
   }
   if (currentStatus == WARNING) {
     if (waterDepthCm >= CRITICAL_LEVEL_CM) return CRITICAL;
-    if (waterDepthCm < (WARNING_LEVEL_CM - HYSTERESIS_CM)) return OK;
+    if (waterDepthCm < (WARNING_LEVEL_CM - HYSTERESIS_CM)) return NORMAL;
     return WARNING;
   }
-  // Currently OK
+  // Currently NORMAL
   if (waterDepthCm >= CRITICAL_LEVEL_CM) return CRITICAL;
   if (waterDepthCm >= WARNING_LEVEL_CM) return WARNING;
-  return OK;
+  return NORMAL;
 }
 
 void publishReading(float levelCm, float battV, NodeStatus status) {
@@ -258,7 +258,7 @@ void publishReading(float levelCm, float battV, NodeStatus status) {
   doc["water_level_cm"] = levelCm;
   doc["battery_v"] = battV;
   switch (status) {
-    case OK: doc["status"] = "OK"; break;
+    case NORMAL: doc["status"] = "NORMAL"; break;
     case WARNING: doc["status"] = "WARNING"; break;
     case CRITICAL: doc["status"] = "CRITICAL"; break;
   }
@@ -266,8 +266,8 @@ void publishReading(float levelCm, float battV, NodeStatus status) {
   size_t n = serializeJson(doc, payload, sizeof(payload));
 
   if (mqttClient.connected()) {
-    bool ok = mqttClient.publish(MQTT_TOPIC, payload, n);
-    if (!ok) {
+    bool NORMAL = mqttClient.publish(MQTT_TOPIC, payload, n);
+    if (!NORMAL) {
       Serial.println("MQTT publish failed, buffering");
       appendToBuffer(payload);
     } else {

@@ -1,1 +1,0 @@
--- No-op retained for compatibility. The canonical audit_logs schema is 007.

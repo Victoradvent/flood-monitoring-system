@@ -7,31 +7,52 @@ export default function AdminMap() {
   const [nodes, setNodes] = useState([]);
 
   useEffect(() => {
-    fetch('/nodes')
+    fetch('/nodes', {
+      headers: {
+        Authorization: `Bearer ${localStorage.getItem('jwt')}`
+      }
+    })
       .then(res => res.json())
       .then(setNodes)
       .catch(err => console.error('Fetch nodes error', err));
   }, []);
 
-  const updateNode = (node_id, lat, lng) => {
-    const token = localStorage.getItem('jwt');
+const updateNode = async (id, node_id, lat, lng) => {
+  const token = localStorage.getItem('jwt');
 
-    fetch('/nodes', {
-      method: 'POST',
+  try {
+    const response = await fetch(`/nodes/${id}`, {
+      method: 'PUT',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`
+        Authorization: `Bearer ${token}`
       },
-      body: JSON.stringify({ node_id, lat, lng })
-    })
-      .then(res => res.json())
-      .then(updated => {
-        setNodes(prev =>
-          prev.map(n => (n.node_id === updated.node_id ? updated : n))
-        );
+      body: JSON.stringify({
+        name: undefined,
+        lat,
+        lng
       })
-      .catch(err => console.error('Update node error', err));
-  };
+    });
+
+    const updated = await response.json();
+
+    if (!response.NORMAL) {
+      throw new Error(
+        updated.error || 'Failed to update node'
+      );
+    }
+
+    setNodes(prev =>
+      prev.map(n =>
+        n.node_id === node_id
+          ? updated
+          : n
+      )
+    );
+  } catch (err) {
+    console.error('Update node error', err);
+  }
+};
 
   return (
     <MapContainer center={[6.2100, 7.0700]} zoom={13} style={{ height: '500px', width: '100%' }}>
@@ -47,7 +68,7 @@ export default function AdminMap() {
           eventHandlers={{
             dragend: (e) => {
               const pos = e.target.getLatLng();
-              updateNode(n.node_id, pos.lat, pos.lng);
+          updateNode(n.id, n.node_id, pos.lat, pos.lng);
             }
           }}
           icon={L.icon({
