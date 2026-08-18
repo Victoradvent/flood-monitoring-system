@@ -24,7 +24,8 @@ export default function OperatorPanel() {
       .then(setAlerts)
       .catch(err => console.error('Fetch alerts error', err));
 
-    const ws = new WebSocket('ws://localhost:3000');
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const ws = new WebSocket(`${protocol}//${window.location.host}/ws`);
     ws.onmessage = (evt) => {
       try {
         const msg = JSON.parse(evt.data);

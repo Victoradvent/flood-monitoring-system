@@ -7,10 +7,15 @@ const axios = require('axios');
 const Twilio = require('twilio');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcrypt');
+const cors = require('cors');
+
+ authMiddleware,
+  requireAnyRole(['admin', 'operator']), 
+  const {authenticateToken, authMiddleware, requireRole, requireAnyRole} = require('./auth');
 
 // Shared modules
 const pool = require('./db');
-const { authenticateToken, requireRole, requireAnyRole } = require('./auth');
+const { authenticateToken, authMiddleware, requireRole } = require('./auth');
 
 // Route modules
 const gridControl = require('./routes/grid-control');
@@ -52,6 +57,7 @@ const app = express();
 const server = require('http').createServer(app);
 const wss = new WebSocket.Server({ server });
 app.set('wss', wss);
+app.use(cors());
 app.use(express.json());
 
 // Broadcast helper
@@ -93,7 +99,7 @@ app.post('/login', express.json(), async (req, res) => {
   res.json({ token });
 });
 
-app.get('/history', async (req, res) => {
+app.get('/history', authMiddleware, requireAnyRole(['admin', 'operator']), async (req, res) => {
   const node = req.query.node;
   const limit = Math.min(parseInt(req.query.limit || '50', 10), 500);
   if (!node) return res.status(400).json({ error: 'node query required' });
@@ -111,26 +117,6 @@ app.get('/history', async (req, res) => {
 // List nodes
 // Note: Node CRUD operations are now in routes/nodes.js
 
-app.post('/alerts/:id/ack', authenticateToken, requireRole('operator'), async (req, res) => {
-  const alertId = req.params.id;
-
-  try {
-    const q = `UPDATE alerts
-               SET acknowledged = TRUE,
-                   acknowledged_by = $1,
-                   acknowledged_at = now()
-               WHERE id = $2 RETURNING *`;
-    const r = await pool.query(q, [req.user.username, alertId]);
-    if (r.rowCount === 0) return res.status(404).json({ error: 'alert not found' });
-    res.json(r.rows[0]);
-  } catch (err) {
-    console.error('Ack error', err);
-    res.status(500).json({ error: 'internal' });
-  }
-});
-
-// Note: Alert acknowledgement is also available in routes/alerts.js
-
 app.post('/alert-events', authMiddleware, async (req, res) => {
   const { alert_id, event_type } = req.body;
   if (!alert_id || !event_type) return res.status(400).json({ error: 'missing fields' });
@@ -147,7 +133,7 @@ app.post('/alert-events', authMiddleware, async (req, res) => {
   }
 });
 
-app.get('/reports/alerts-per-day', async (req, res) => {
+app.get('/reports/alerts-per-day',  authMiddleware, requireRole('admin'), async (req, res) => {
   const q = `SELECT date_trunc('day', triggered_at) AS day,
                     COUNT(*) FILTER (WHERE alert_level = 'CRITICAL') AS critical_count,
                     COUNT(*) FILTER (WHERE alert_level = 'WARNING') AS warning_count
@@ -156,7 +142,7 @@ app.get('/reports/alerts-per-day', async (req, res) => {
   res.json(r.rows);
 });
 
-app.get('/reports/events-per-day', async (req, res) => {
+app.get('/reports/events-per-day',  authMiddleware, requireRole('admin'), async (req, res) => {
   const q = `SELECT date_trunc('day', triggered_at) AS day,
                     COUNT(*) FILTER (WHERE event_type = 'notification') AS notifications,
                     COUNT(*) FILTER (WHERE event_type = 'sound') AS sounds
@@ -165,7 +151,7 @@ app.get('/reports/events-per-day', async (req, res) => {
   res.json(r.rows);
 });
 
-app.get('/reports/response-time', async (req, res) => {
+app.get('/reports/response-time',  authMiddleware, requireRole('admin'), async (req, res) => {
   const q = `SELECT date_trunc('day', triggered_at) AS day,
                     AVG(EXTRACT(EPOCH FROM (acknowledged_at - triggered_at))) AS avg_response_seconds
              FROM alerts WHERE acknowledged = TRUE
@@ -174,7 +160,7 @@ app.get('/reports/response-time', async (req, res) => {
   res.json(r.rows);
 });
 
-app.get('/reports/alerts-per-day.csv', async (req, res) => {
+app.get('/reports/alerts-per-day.csv',  authMiddleware, requireRole('admin'), async (req, res) => {
   const q = `SELECT date_trunc('day', triggered_at) AS day,
                     COUNT(*) FILTER (WHERE alert_level = 'CRITICAL') AS critical_count,
                     COUNT(*) FILTER (WHERE alert_level = 'WARNING') AS warning_count
@@ -190,7 +176,7 @@ app.get('/reports/alerts-per-day.csv', async (req, res) => {
   res.send(header + rows);
 });
 
-app.get('/reports/events-per-day.csv', async (req, res) => {
+app.get('/reports/events-per-day.csv',  authMiddleware, requireRole('admin'), async (req, res) => {
   const q = `SELECT date_trunc('day', triggered_at) AS day,
                     COUNT(*) FILTER (WHERE event_type = 'notification') AS notifications,
                     COUNT(*) FILTER (WHERE event_type = 'sound') AS sounds
@@ -206,7 +192,7 @@ app.get('/reports/events-per-day.csv', async (req, res) => {
   res.send(header + rows);
 });
 
-app.get('/reports/response-time.csv', async (req, res) => {
+app.get('/reports/response-time.csv',  authMiddleware, requireRole('admin'), async (req, res) => {
   const q = `SELECT date_trunc('day', triggered_at) AS day,
                     AVG(EXTRACT(EPOCH FROM (acknowledged_at - triggered_at))) AS avg_response_seconds
              FROM alerts WHERE acknowledged = TRUE
@@ -265,10 +251,10 @@ async function saveReading(payload, raw) {
 }
 
 // Insert alert record
-async function saveAlert(node_id, level, provider, provider_response) {
+async function saveAlert(node_id, level) {
   const q = `INSERT INTO alerts (node_id, alert_level, sent, provider, provider_response)
              VALUES ($1,$2,$3,$4,$5) RETURNING id`;
-  const vals = [node_id, level, true, provider, provider_response || null];
+  const vals = [node_id, level, false, null, null];
   const res = await pool.query(q, vals);
   return res.rows[0].id;
 }
@@ -303,8 +289,7 @@ async function maybeTriggerGridHazard(payload) {
                    ST_SetSRID(ST_MakePoint(n.lng, n.lat), 4326)::geography,
                    1000
                  )
-               ORDER BY ge.id
-               LIMIT 1`;
+               AND ge.status = 'NORMAL' `;
     const r = await pool.query(q, [nodeId]);
 
     if (r.rowCount === 0) return;
@@ -372,9 +357,9 @@ async function handleAlert(payload) {
   // Lookup subscribers from database 
   let recipients = [];
   try {
-    const subQuery = `SELECT phone FROM subscribers WHERE node_id = $1 AND active = TRUE AND role IN ('operator', 'resident')`;
+    const subQuery = `SELECT id, phone FROM subscribers WHERE node_id = $1 AND active = TRUE AND role IN ('operator', 'resident')`;
     const subResult = await pool.query(subQuery, [node]);
-    recipients = subResult.rows.map(r => r.phone);
+    recipients = subResult.rows;
   } catch (err) {
     console.error('Subscriber lookup error', err);
   }
@@ -388,29 +373,42 @@ async function handleAlert(payload) {
 
   const body = composeAlertMessage(node, level, levelValue, ts);
 
-  // Try Twilio first, fallback to HTTP gateway
+  const alertId = await saveAlert(node, level);
+  let sentCount = 0;
   let provider = null;
   let providerResp = null;
-  for (const to of recipients) {
+  for (const recipient of recipients) {
+    let deliveryStatus = 'FAILED';
+    let response = null;
     try {
       if (twilioClient) {
-        const resp = await sendSmsTwilio(to, body);
+        const resp = await sendSmsTwilio(recipient.phone, body);
         provider = 'twilio';
-        providerResp = resp;
+        response = resp;
       } else {
-        const resp = await sendSmsHttp(to, body);
+        const resp = await sendSmsHttp(recipient.phone, body);
         provider = 'http_gateway';
-        providerResp = resp;
+        response = resp;
       }
-      console.log(`SMS sent to ${to} via ${provider}`);
+      deliveryStatus = 'SENT';
+      sentCount += 1;
+      providerResp = response;
+      console.log(`SMS sent to ${recipient.phone} via ${provider}`);
     } catch (err) {
       console.error('SMS send error', err.message);
-      // continue to next recipient or try fallback
+      response = { error: err.message };
     }
+    await pool.query(
+      `INSERT INTO alert_recipients (alert_id, subscriber_id, status, delivery_provider, provider_response, sent_at)
+       VALUES ($1,$2,$3,$4,$5,$6)`,
+      [alertId, recipient.id, deliveryStatus, provider, response, deliveryStatus === 'SENT' ? new Date() : null]
+    );
   }
 
-  // Record alert and set cooldown
-  await saveAlert(node, level, provider, providerResp ? JSON.stringify(providerResp) : null);
+  await pool.query(
+    'UPDATE alerts SET sent=$1, provider=$2, provider_response=$3 WHERE id=$4',
+    [sentCount > 0, provider, providerResp, alertId]
+  );
   setCooldown(node, level);
 
   // Broadcast alert to dashboard
@@ -419,7 +417,8 @@ async function handleAlert(payload) {
     node: node,
     level: level,
     levelValue: levelValue,
-    timestamp: ts
+    timestamp: ts,
+    id: alertId
   });
 }
 

@@ -54,9 +54,45 @@ function AuditPanel({ token, role }) {
         </select>
         <button onClick={fetchLogs} style={{ marginRight: '8px' }}>Apply Filters</button>
         {role === 'admin' && (
-          <a href={`/audit/export/csv?${new URLSearchParams(filters).toString()}`} target="_blank" rel="noopener noreferrer">
-            <button>Export CSV</button>
-          </a>
+        <button
+          onClick={async () => {
+            try {
+              const query = new URLSearchParams(filters).toString();
+
+              const response = await fetch(
+                `/audit/export/csv?${query}`,
+                {
+                  headers: {
+                    Authorization: `Bearer ${token}`
+                  }
+                }
+              );
+
+              if (!response.ok) {
+                throw new Error('CSV export failed');
+              }
+
+              const blob = await response.blob();
+
+              const url = window.URL.createObjectURL(blob);
+              const link = document.createElement('a');
+
+              link.href = url;
+              link.download = 'audit_logs.csv';
+
+              document.body.appendChild(link);
+              link.click();
+              link.remove();
+
+              window.URL.revokeObjectURL(url);
+            } catch (err) {
+              console.error('CSV export error:', err);
+              alert(err.message);
+            }
+          }}
+        >
+          Export CSV
+        </button>
         )}
       </div>
 

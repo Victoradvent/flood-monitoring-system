@@ -1,6 +1,7 @@
 // Lightweight WebSocket client wrapper
 // Adjust WS_URL to match backend WebSocket endpoint (ws://localhost:3000 by default)
-export const WS_URL = process.env.REACT_APP_WS_URL || 'ws://localhost:3000';
+const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+export const WS_URL = process.env.REACT_APP_WS_URL || `${protocol}//${window.location.host}/ws`;
 let socket = null;
 const listeners = new Set();
 

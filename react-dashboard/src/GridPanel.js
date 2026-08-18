@@ -26,7 +26,8 @@ function GridPanel({ token, role }) {
   useEffect(() => {
     if (!token) return undefined;
 
-    const ws = new WebSocket(`ws://${window.location.hostname}:3000`);
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const ws = new WebSocket(`${protocol}//${window.location.host}/ws`);
     ws.onmessage = (event) => {
       try {
         const msg = JSON.parse(event.data);

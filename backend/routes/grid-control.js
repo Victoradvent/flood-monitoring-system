@@ -22,8 +22,9 @@ router.post('/:id/cutoff', authMiddleware, requireRole('operator'), async (req, 
     if (equipmentRes.rowCount === 0) return res.status(404).json({ error: 'Equipment not found' });
 
     const updateRes = await pool.query(
-      'UPDATE grid_equipment SET recommended=$1 WHERE id=$2 RETURNING *',
-      [true, id]
+      `UPDATE grid_equipment SET recommended=TRUE, status='CUTOFF_RECOMMENDED',
+       recommended_at=NOW() WHERE id=$1 RETURNING *`,
+      [id]
     );
     const equipment = updateRes.rows[0];
 
@@ -35,7 +36,7 @@ router.post('/:id/cutoff', authMiddleware, requireRole('operator'), async (req, 
     });
 
     try {
-      await logAudit(id, req.user.id, 'RECOMMEND_CUTOFF', 'Manual cutoff recommendation issued');
+      await logAudit(id, req.user.user_id, 'RECOMMEND_CUTOFF', 'Manual cutoff recommendation issued');
     } catch (err) {
       console.error('Audit log error', err);
     }
@@ -46,22 +47,9 @@ router.post('/:id/cutoff', authMiddleware, requireRole('operator'), async (req, 
   }
 });
 
-// Restore power
+// Physical restoration is deliberately not implemented in recommendation-only mode.
 router.post('/:id/restore', authMiddleware, requireRole('operator'), async (req, res) => {
-  const id = req.params.id;
-  try {
-    const r = await pool.query(
-      'UPDATE grid_equipment SET status=$1 WHERE id=$2 AND last_cutoff IS NULL RETURNING *',
-      ['ON', id]
-    );
-    if (r.rowCount === 0) {
-      return res.status(400).json({ error: 'Equipment cannot be restored until inspection is confirmed' });
-    }
-
-    res.json({ message: 'Power restored', equipment: r.rows[0] });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+  res.status(409).json({ error: 'This deployment is recommendation-only; no physical power control is available.' });
 });
 
 module.exports = router;

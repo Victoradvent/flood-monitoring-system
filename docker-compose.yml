@@ -2,7 +2,7 @@ version: '3.9'
 
 services:
   db:
-    image: postgres:15
+    image: postgis/postgis:15-3.4
     container_name: flood_db
     restart: always
     environment:
@@ -20,7 +20,7 @@ services:
     container_name: flood_mqtt
     restart: always
     volumes:
-      - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf
+      - ./mosquitto/config/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
       - mosquitto_data:/mosquitto/data
       - mosquitto_log:/mosquitto/log
     ports:
@@ -34,6 +34,12 @@ services:
     container_name: flood_backend
     restart: always
     env_file: .env
+  environment:
+    DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+    PG_HOST: db
+    MQTT_BROKER: mqtt
+    MQTT_PORT: 1883
+    MQTT_TOPIC: nodes/flood
     depends_on:
       - db
       - mqtt
