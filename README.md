@@ -2,15 +2,15 @@
 
 A real-time flood monitoring and grid equipment control system with automatic hazard detection and cutoff recommendations.
 
-**Features:**
-- ✅ Real-time water level monitoring via MQTT
-- ✅ Automatic critical hazard detection
-- ✅ Grid equipment cutoff recommendations (no actual power cutoff)
-- ✅ SMS alerts (Twilio integration)
-- ✅ Web dashboard with live updates
-- ✅ Audit logging for all actions
-- ✅ Role-based access control (Admin, Operator)
-- ✅ Historical data & trending analysis
+*Features:
+Real-time water level monitoring via MQTT
+Automatic critical hazard detection
+Grid equipment cutoff recommendations (no actual power cutoff)
+SMS alerts (Twilio integration)
+Web dashboard with live updates
+Audit logging for all actions
+Role-based access control (Admin, Operator)
+Historical data & trending analysis
 
 ## Quick Start
 
@@ -24,7 +24,7 @@ cd ../react-dashboard && npm install
 cp .env.example .env.local
 
 # Start with Docker
-docker-compose up
+docker-compose up build
 ```
 
 **Access:**

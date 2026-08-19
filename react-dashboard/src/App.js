@@ -14,11 +14,19 @@ import AuditSummary from './AuditSummary';
 import AuditTrends from './AuditTrends';
 import Login from './Login';
 import AdminPanel from './AdminPanel';
+import AdminUserPanel from './AdminUserPanel';
+import ResidentDashboard from './ResidentDashboard';
 import { subscribe } from './wsClient';
 
 import './App.css';
 
 export default function App() {
+  // Residents reach this app via a separate link (e.g. /resident) and never
+  // see the operator/admin login - they only get their own node's status.
+  if (window.location.pathname.startsWith('/resident')) {
+    return <ResidentDashboard />;
+  }
+
   const [nodes, setNodes] = useState({});
   const [log, setLog] = useState([]);
   const [selectedNode, setSelectedNode] =
@@ -172,6 +180,12 @@ export default function App() {
             <>
               <section>
                 <AdminPanel
+                  token={token}
+                />
+              </section>
+
+              <section>
+                <AdminUserPanel
                   token={token}
                 />
               </section>

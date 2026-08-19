@@ -24,6 +24,8 @@ const nodeRoutes = require('./routes/nodes');
 const reportsRoutes = require('./routes/reports');
 const gridInspection = require('./routes/grid-inspection');
 const subscribersRoutes = require('./routes/subscribers-admin');
+const residentRoutes = require('./routes/resident');
+const usersAdminRoutes = require('./routes/users-admin');
 
 // Config
 const {
@@ -78,6 +80,8 @@ app.use('/nodes', nodeRoutes);
 app.use('/reports', reportsRoutes);
 app.use('/grid-inspection', gridInspection);
 app.use('/subscribers', subscribersRoutes);
+app.use('/resident', residentRoutes);
+app.use('/users', usersAdminRoutes);
 
 app.post('/login', express.json(), async (req, res) => {
   const { username, password } = req.body;
