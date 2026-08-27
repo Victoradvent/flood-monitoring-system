@@ -35,7 +35,6 @@ export default function AdminUserPanel({ token }) {
 
   useEffect(() => {
     if (token) loadUsers();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);
 
   const createUser = async e => {
