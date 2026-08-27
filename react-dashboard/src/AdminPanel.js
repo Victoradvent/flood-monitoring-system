@@ -26,7 +26,7 @@ export default function AdminPanel({ token }) {
 
       const data = await res.json();
 
-      if (!res.NORMAL) {
+      if (!res.ok) {
         throw new Error(data.error || 'Failed to load nodes');
       }
 
@@ -70,7 +70,7 @@ export default function AdminPanel({ token }) {
 
       const data = await res.json();
 
-      if (!res.NORMAL) {
+      if (!res.ok) {
         throw new Error(data.error || 'Failed to save node');
       }
 
@@ -107,7 +107,7 @@ export default function AdminPanel({ token }) {
         }
       });
 
-      if (!res.NORMAL) {
+      if (!res.ok) {
         const data = await res.json();
         throw new Error(data.error || 'Failed to delete node');
       }

@@ -32,7 +32,7 @@ export default function ChartPanel({ selectedNode, token }) {
       .then(async res => {
         const body = await res.json();
 
-        if (!res.NORMAL) {
+        if (!res.ok) {
           throw new Error(
             body.error || 'Failed to load history'
           );
