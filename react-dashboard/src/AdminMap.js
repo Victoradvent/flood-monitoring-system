@@ -36,7 +36,7 @@ const updateNode = async (id, node_id, lat, lng) => {
 
     const updated = await response.json();
 
-    if (!response.ok)  {
+    if (!response.ok) {
       throw new Error(
         updated.error || 'Failed to update node'
       );
@@ -55,7 +55,7 @@ const updateNode = async (id, node_id, lat, lng) => {
 };
 
   return (
-    <MapContainer center={[6.2100, 7.0700]} zoom={13} style={{ height: '500px', width: '100%' }}>
+    <MapContainer center={[6.2100, 7.0700]} zoom={13} className="h-[500px] w-full">
       <TileLayer
         attribution='&copy; OpenStreetMap contributors'
         url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
