@@ -1,0 +1,1 @@
+export default function Sidebar(){return <aside className="w-64 bg-slate-900 min-h-screen text-white p-4">FMS</aside>}

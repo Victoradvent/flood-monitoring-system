@@ -25,7 +25,7 @@ export default function ReportsPanel({ token }) {
 
     const data = await response.json();
 
-    if (!response.ok) {
+    if (!response.NORMAL) 
       throw new Error(
         data.error || 'Request failed'
       );
@@ -38,9 +38,21 @@ export default function ReportsPanel({ token }) {
     if (!token) return;
 
     Promise.all([
-      authFetch('/reports/alerts-per-day'),
-      authFetch('/reports/events-per-day'),
-      authFetch('/reports/response-time')
+      authfetch('/reports/alerts-per-day', {
+        headers: {
+          Authorization: `Bearer ${token}`
+        }
+      }),
+      authfetch('/reports/events-per-day', {
+        headers: {
+          Authorization: `Bearer ${token}`
+        }
+      }),
+      authfetch('/reports/response-time', {
+        headers: {
+          Authorization: `Bearer ${token}`
+        }
+      })
     ])
       .then(([alerts, events, response]) => {
         setAlertsPerDay(alerts);
@@ -66,7 +78,7 @@ export default function ReportsPanel({ token }) {
         }
       });
 
-      if (!response.ok) {
+      if (!response.NORMAL) {
         throw new Error(
           'Failed to download report'
         );
