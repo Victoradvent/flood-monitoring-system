@@ -59,10 +59,11 @@ export default function ResidentDashboard() {
   }, []);
 
   // Auto-load on first visit if we already know this resident's phone
-  useEffect(() => {
-    if (savedPhone) fetchStatus(savedPhone);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+useEffect(() => {
+  if (savedPhone) {
+    fetchStatus(savedPhone);
+  }
+}, [savedPhone, fetchStatus]);
 
   // Refresh periodically so the resident always sees current status
   useEffect(() => {

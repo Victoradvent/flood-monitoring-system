@@ -25,7 +25,7 @@ export default function ReportsPanel({ token }) {
 
     const data = await response.json();
 
-    if (!response.NORMAL) 
+    if (!response.ok) {
       throw new Error(
         data.error || 'Request failed'
       );
@@ -38,21 +38,9 @@ export default function ReportsPanel({ token }) {
     if (!token) return;
 
     Promise.all([
-      authfetch('/reports/alerts-per-day', {
-        headers: {
-          Authorization: `Bearer ${token}`
-        }
-      }),
-      authfetch('/reports/events-per-day', {
-        headers: {
-          Authorization: `Bearer ${token}`
-        }
-      }),
-      authfetch('/reports/response-time', {
-        headers: {
-          Authorization: `Bearer ${token}`
-        }
-      })
+      authFetch('/reports/alerts-per-day'),
+      authFetch('/reports/events-per-day'),
+      authFetch('/reports/response-time')
     ])
       .then(([alerts, events, response]) => {
         setAlertsPerDay(alerts);
@@ -78,7 +66,7 @@ export default function ReportsPanel({ token }) {
         }
       });
 
-      if (!response.NORMAL) {
+      if (!response.ok) {
         throw new Error(
           'Failed to download report'
         );
@@ -90,6 +78,7 @@ export default function ReportsPanel({ token }) {
       const a = document.createElement('a');
       a.href = url;
       a.download = filename;
+
       document.body.appendChild(a);
       a.click();
       a.remove();
@@ -104,16 +93,18 @@ export default function ReportsPanel({ token }) {
   };
 
   return (
-    <div>
-      <h2>Reporting Dashboard</h2>
+    <div className="space-y-6">
+      <div>
+        <h2 className="text-xl font-bold text-slate-900">
+          Reporting Dashboard
+        </h2>
 
-      <div
-        style={{
-          display: 'flex',
-          gap: 8,
-          marginBottom: 16
-        }}
-      >
+        <p className="mt-1 text-sm text-slate-500">
+          Review system alerts, events, and response performance.
+        </p>
+      </div>
+
+      <div className="flex flex-wrap gap-3">
         <button
           onClick={() =>
             downloadCSV(
@@ -121,6 +112,7 @@ export default function ReportsPanel({ token }) {
               'alerts-per-day.csv'
             )
           }
+          className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-slate-700"
         >
           Download Alerts CSV
         </button>
@@ -132,6 +124,7 @@ export default function ReportsPanel({ token }) {
               'events-per-day.csv'
             )
           }
+          className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-slate-700"
         >
           Download Events CSV
         </button>
@@ -143,68 +136,91 @@ export default function ReportsPanel({ token }) {
               'response-time.csv'
             )
           }
+          className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-slate-700"
         >
           Download Response Time CSV
         </button>
       </div>
 
-      <h3>Alerts per Day</h3>
+      <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+        <h3 className="mb-4 text-lg font-semibold text-slate-900">
+          Alerts per Day
+        </h3>
 
-      <ResponsiveContainer width="100%" height={250}>
-        <BarChart data={alertsPerDay}>
-          <CartesianGrid strokeDasharray="3 3" />
-          <XAxis dataKey="day" />
-          <YAxis />
-          <Tooltip />
-          <Bar
-            dataKey="critical_count"
-            name="Critical"
-          />
-          <Bar
-            dataKey="warning_count"
-            name="Warning"
-          />
-        </BarChart>
-      </ResponsiveContainer>
+        <div className="h-[250px]">
+          <ResponsiveContainer width="100%" height="100%">
+            <BarChart data={alertsPerDay}>
+              <CartesianGrid strokeDasharray="3 3" />
+              <XAxis dataKey="day" />
+              <YAxis />
+              <Tooltip />
 
-      <h3>
-        Notifications &amp; Sounds per Day
-      </h3>
+              <Bar
+                dataKey="critical_count"
+                name="Critical"
+              />
 
-      <ResponsiveContainer width="100%" height={250}>
-        <BarChart data={eventsPerDay}>
-          <CartesianGrid strokeDasharray="3 3" />
-          <XAxis dataKey="day" />
-          <YAxis />
-          <Tooltip />
-          <Bar
-            dataKey="notifications"
-            name="Notifications"
-          />
-          <Bar
-            dataKey="sounds"
-            name="Sounds"
-          />
-        </BarChart>
-      </ResponsiveContainer>
+              <Bar
+                dataKey="warning_count"
+                name="Warning"
+              />
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      </section>
 
-      <h3>
-        Average Response Time (seconds)
-      </h3>
+      <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+        <h3 className="mb-4 text-lg font-semibold text-slate-900">
+          Events per Day
+        </h3>
 
-      <ResponsiveContainer width="100%" height={250}>
-        <LineChart data={responseTime}>
-          <CartesianGrid strokeDasharray="3 3" />
-          <XAxis dataKey="day" />
-          <YAxis unit="s" />
-          <Tooltip />
-          <Line
-            type="monotone"
-            dataKey="avg_response_seconds"
-            dot={false}
-          />
-        </LineChart>
-      </ResponsiveContainer>
+        <div className="h-[250px]">
+          <ResponsiveContainer width="100%" height="100%">
+            <BarChart data={eventsPerDay}>
+              <CartesianGrid strokeDasharray="3 3" />
+              <XAxis dataKey="day" />
+              <YAxis />
+              <Tooltip />
+
+              <Bar
+                dataKey="notifications"
+                name="Notifications"
+              />
+
+              <Bar
+                dataKey="sounds"
+                name="Sounds"
+              />
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      </section>
+
+      <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+        <h3 className="mb-4 text-lg font-semibold text-slate-900">
+          Average Response Time
+        </h3>
+
+        <div className="h-[250px]">
+          <ResponsiveContainer width="100%" height="100%">
+            <LineChart data={responseTime}>
+              <CartesianGrid strokeDasharray="3 3" />
+
+              <XAxis dataKey="day" />
+
+              <YAxis unit="s" />
+
+              <Tooltip />
+
+              <Line
+                type="monotone"
+                dataKey="avg_response_seconds"
+                dot={false}
+              />
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+      </section>
     </div>
   );
 }

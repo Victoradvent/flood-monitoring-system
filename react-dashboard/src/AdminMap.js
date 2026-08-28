@@ -36,7 +36,7 @@ const updateNode = async (id, node_id, lat, lng) => {
 
     const updated = await response.json();
 
-    if (!response.NORMAL) {
+    if (!response.ok)  {
       throw new Error(
         updated.error || 'Failed to update node'
       );
