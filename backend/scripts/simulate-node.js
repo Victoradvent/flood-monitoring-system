@@ -9,27 +9,33 @@
 // It ramps water level up past WARNING (30cm) and CRITICAL (50cm), then back
 // down, publishing one reading every 5 seconds. Ctrl+C to stop.
 
-require('dotenv').config();
-const mqtt = require('mqtt');
+require("dotenv").config();
+const mqtt = require("mqtt");
 
-const nodeId = process.argv[2] || 'NODE001';
-const { MQTT_BROKER = 'mqtt', MQTT_PORT = 1883, MQTT_USER, MQTT_PASS, MQTT_TOPIC = 'nodes/flood' } = process.env;
+const nodeId = process.argv[2] || "NODE001";
+const {
+  MQTT_BROKER = "mqtt",
+  MQTT_PORT = 1883,
+  MQTT_USER,
+  MQTT_PASS,
+  MQTT_TOPIC = "nodes/flood",
+} = process.env;
 
 const client = mqtt.connect(`mqtt://${MQTT_BROKER}:${MQTT_PORT}`, {
   username: MQTT_USER,
-  password: MQTT_PASS
+  password: MQTT_PASS,
 });
 
 function statusFor(levelCm) {
-  if (levelCm >= 50) return 'CRITICAL';
-  if (levelCm >= 30) return 'WARNING';
-  return 'NORMAL';
+  if (levelCm >= 50) return "CRITICAL";
+  if (levelCm >= 30) return "WARNING";
+  return "NORMAL";
 }
 
 let levelCm = 5;
 let direction = 1; // rising, then falls back once it peaks past CRITICAL
 
-client.on('connect', () => {
+client.on("connect", () => {
   console.log(`Simulating ${nodeId} on topic "${MQTT_TOPIC}"...`);
 
   setInterval(() => {
@@ -42,12 +48,12 @@ client.on('connect', () => {
       timestamp: new Date().toISOString(),
       water_level_cm: levelCm,
       battery_v: 3.7,
-      status: statusFor(levelCm)
+      status: statusFor(levelCm),
     };
 
     client.publish(MQTT_TOPIC, JSON.stringify(payload), { qos: 1 });
-    console.log('Published:', payload);
+    console.log("Published:", payload);
   }, 5000);
 });
 
-client.on('error', err => console.error('MQTT error', err.message));
+client.on("error", (err) => console.error("MQTT error", err.message));

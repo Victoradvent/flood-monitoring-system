@@ -1,2 +1,65 @@
-import React,{useEffect,useState} from 'react';import axios from 'axios';import Card from './components/ui/Card';
-export default function AuditTrends({token,role}){const[trends,setTrends]=useState([]),[alerts,setAlerts]=useState([]);useEffect(()=>{if(role!=='admin'||!token)return;axios.get('/audit-trends/weekly-trends',{headers:{Authorization:`Bearer ${token}`}}).then(r=>{setTrends(r.data.trends);setAlerts(r.data.alerts||[])}).catch(console.error)},[token,role]);if(role!=='admin')return null;return <Card title="Weekly Trend Analysis" subtitle="Compare the current week with the previous week">{alerts.length>0&&<div className="mb-4 space-y-2">{alerts.map((a,i)=><div key={i} className="rounded-lg bg-red-50 px-3 py-2 text-sm font-semibold text-red-700">{a}</div>)}</div>}<div className="overflow-x-auto"><table className="w-full min-w-[650px] text-left text-sm"><thead className="border-b border-slate-100 text-[10px] uppercase tracking-wider text-slate-400"><tr><th className="px-3 py-3">Action</th><th>Last Week</th><th>Previous Week</th><th>Change</th></tr></thead><tbody className="divide-y divide-slate-100">{trends.map((t,i)=><tr key={i}><td className="px-3 py-3 font-semibold">{t.action}</td><td>{t.currentCount}</td><td>{t.prevCount}</td><td className={`font-semibold ${t.change>=0?'text-emerald-600':'text-red-600'}`}>{t.change}%</td></tr>)}</tbody></table></div></Card>}
+import React, { useEffect, useState } from "react";
+import axios from "axios";
+import Card from "./components/ui/Card";
+export default function AuditTrends({ token, role }) {
+  const [trends, setTrends] = useState([]),
+    [alerts, setAlerts] = useState([]);
+  useEffect(() => {
+    if (role !== "admin" || !token) return;
+    axios
+      .get("/audit-trends/weekly-trends", {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      .then((r) => {
+        setTrends(r.data.trends);
+        setAlerts(r.data.alerts || []);
+      })
+      .catch(console.error);
+  }, [token, role]);
+  if (role !== "admin") return null;
+  return (
+    <Card
+      title="Weekly Trend Analysis"
+      subtitle="Compare the current week with the previous week"
+    >
+      {alerts.length > 0 && (
+        <div className="mb-4 space-y-2">
+          {alerts.map((a, i) => (
+            <div
+              key={i}
+              className="rounded-lg bg-red-50 px-3 py-2 text-sm font-semibold text-red-700"
+            >
+              {a}
+            </div>
+          ))}
+        </div>
+      )}
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[650px] text-left text-sm">
+          <thead className="border-b border-slate-100 text-[10px] uppercase tracking-wider text-slate-400">
+            <tr>
+              <th className="px-3 py-3">Action</th>
+              <th>Last Week</th>
+              <th>Previous Week</th>
+              <th>Change</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-100">
+            {trends.map((t, i) => (
+              <tr key={i}>
+                <td className="px-3 py-3 font-semibold">{t.action}</td>
+                <td>{t.currentCount}</td>
+                <td>{t.prevCount}</td>
+                <td
+                  className={`font-semibold ${t.change >= 0 ? "text-emerald-600" : "text-red-600"}`}
+                >
+                  {t.change}%
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </Card>
+  );
+}

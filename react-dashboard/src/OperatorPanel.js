@@ -1,3 +1,140 @@
-import React,{useEffect,useState} from 'react';import {showNotification,requestPermission,playAlertSound} from './notifications';import Card from './components/ui/Card';import Badge from './components/ui/Badge';
-function logEvent(alertId,type,token){fetch('/alert-events',{method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${token}`},body:JSON.stringify({alert_id:alertId,event_type:type})}).catch(e=>console.error('Log event error',e))}
-export default function OperatorPanel({token:propToken}){const[alerts,setAlerts]=useState([]);const token=propToken||localStorage.getItem('jwt');useEffect(()=>{if(!token)return;requestPermission();fetch('/alerts',{headers:{Authorization:`Bearer ${token}`}}).then(async r=>{const d=await r.json();if(!r.ok)throw new Error(d.error||'Failed to load alerts');return d}).then(setAlerts).catch(e=>console.error('Fetch alerts error',e));const protocol=location.protocol==='https:'?'wss:':'ws:';const ws=new WebSocket(`${protocol}//${location.host}/ws`);ws.onmessage=evt=>{try{const msg=JSON.parse(evt.data);if(msg.type==='alert'){setAlerts(p=>[msg,...p]);if(msg.level==='CRITICAL'){showNotification(`CRITICAL Alert - ${msg.node}`,`Water level ${msg.levelValue} cm at ${msg.timestamp}`);playAlertSound();logEvent(msg.id,'notification',token);logEvent(msg.id,'sound',token)}}}catch(e){console.error('WS parse error',e)}};return()=>ws.close()},[token]);const acknowledge=id=>fetch(`/alerts/${id}/ack`,{method:'POST',headers:{Authorization:`Bearer ${token}`}}).then(async r=>{const d=await r.json();if(!r.ok)throw new Error(d.error||'Acknowledgement failed');return d}).then(updated=>setAlerts(p=>p.map(a=>a.id===updated.id?updated:a))).catch(e=>console.error('Ack error',e));return <Card title="Alerts" subtitle="Live flood alerts requiring operator attention" action={<span className="rounded-full bg-red-50 px-2.5 py-1 text-xs font-semibold text-red-600">{alerts.length} alerts</span>}><div className="overflow-x-auto"><table className="w-full min-w-[700px] text-left text-sm"><thead className="border-b border-slate-100 text-[10px] uppercase tracking-wider text-slate-400"><tr><th className="px-3 py-3">Alert ID</th><th>Node</th><th>Level</th><th>Water Level</th><th>Time</th><th>Status</th><th className="text-right">Action</th></tr></thead><tbody className="divide-y divide-slate-100">{alerts.map((a,i)=><tr key={a.id||i} className="hover:bg-slate-50"><td className="px-3 py-3 font-semibold">{a.id||'—'}</td><td>{a.node||a.node_id||'—'}</td><td><Badge value={a.level||a.alert_level||'WARNING'}/></td><td>{a.levelValue??a.water_level_cm??'—'} cm</td><td className="text-xs text-slate-500">{a.timestamp||a.triggered_at||'—'}</td><td>{a.acknowledged?<span className="text-xs font-semibold text-emerald-600">Acknowledged</span>:<span className="text-xs font-semibold text-red-600">New</span>}</td><td className="text-right">{!a.acknowledged&&a.id?<button className="secondary-btn px-3 py-1.5 text-xs" onClick={()=>acknowledge(a.id)}>Acknowledge</button>:<span className="text-xs text-slate-400">—</span>}</td></tr>)}</tbody></table></div>{alerts.length===0&&<div className="py-12 text-center text-sm text-slate-400">No active alerts.</div>}</Card>}
+import React, { useEffect, useState } from "react";
+import {
+  showNotification,
+  requestPermission,
+  playAlertSound,
+} from "./notifications";
+import Card from "./components/ui/Card";
+import Badge from "./components/ui/Badge";
+function logEvent(alertId, type, token) {
+  fetch("/alert-events", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ alert_id: alertId, event_type: type }),
+  }).catch((e) => console.error("Log event error", e));
+}
+export default function OperatorPanel({ token: propToken }) {
+  const [alerts, setAlerts] = useState([]);
+  const token = propToken || localStorage.getItem("jwt");
+  useEffect(() => {
+    if (!token) return;
+    requestPermission();
+    fetch("/alerts", { headers: { Authorization: `Bearer ${token}` } })
+      .then(async (r) => {
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.error || "Failed to load alerts");
+        return d;
+      })
+      .then(setAlerts)
+      .catch((e) => console.error("Fetch alerts error", e));
+    const protocol = location.protocol === "https:" ? "wss:" : "ws:";
+    const ws = new WebSocket(`${protocol}//${location.host}/ws`);
+    ws.onmessage = (evt) => {
+      try {
+        const msg = JSON.parse(evt.data);
+        if (msg.type === "alert") {
+          setAlerts((p) => [msg, ...p]);
+          if (msg.level === "CRITICAL") {
+            showNotification(
+              `CRITICAL Alert - ${msg.node}`,
+              `Water level ${msg.levelValue} cm at ${msg.timestamp}`,
+            );
+            playAlertSound();
+            logEvent(msg.id, "notification", token);
+            logEvent(msg.id, "sound", token);
+          }
+        }
+      } catch (e) {
+        console.error("WS parse error", e);
+      }
+    };
+    return () => ws.close();
+  }, [token]);
+  const acknowledge = (id) =>
+    fetch(`/alerts/${id}/ack`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then(async (r) => {
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.error || "Acknowledgement failed");
+        return d;
+      })
+      .then((updated) =>
+        setAlerts((p) => p.map((a) => (a.id === updated.id ? updated : a))),
+      )
+      .catch((e) => console.error("Ack error", e));
+  return (
+    <Card
+      title="Alerts"
+      subtitle="Live flood alerts requiring operator attention"
+      action={
+        <span className="rounded-full bg-red-50 px-2.5 py-1 text-xs font-semibold text-red-600">
+          {alerts.length} alerts
+        </span>
+      }
+    >
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[700px] text-left text-sm">
+          <thead className="border-b border-slate-100 text-[10px] uppercase tracking-wider text-slate-400">
+            <tr>
+              <th className="px-3 py-3">Alert ID</th>
+              <th>Node</th>
+              <th>Level</th>
+              <th>Water Level</th>
+              <th>Time</th>
+              <th>Status</th>
+              <th className="text-right">Action</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-100">
+            {alerts.map((a, i) => (
+              <tr key={a.id || i} className="hover:bg-slate-50">
+                <td className="px-3 py-3 font-semibold">{a.id || "—"}</td>
+                <td>{a.node || a.node_id || "—"}</td>
+                <td>
+                  <Badge value={a.level || a.alert_level || "WARNING"} />
+                </td>
+                <td>{a.levelValue ?? a.water_level_cm ?? "—"} cm</td>
+                <td className="text-xs text-slate-500">
+                  {a.timestamp || a.triggered_at || "—"}
+                </td>
+                <td>
+                  {a.acknowledged ? (
+                    <span className="text-xs font-semibold text-emerald-600">
+                      Acknowledged
+                    </span>
+                  ) : (
+                    <span className="text-xs font-semibold text-red-600">
+                      New
+                    </span>
+                  )}
+                </td>
+                <td className="text-right">
+                  {!a.acknowledged && a.id ? (
+                    <button
+                      className="secondary-btn px-3 py-1.5 text-xs"
+                      onClick={() => acknowledge(a.id)}
+                    >
+                      Acknowledge
+                    </button>
+                  ) : (
+                    <span className="text-xs text-slate-400">—</span>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {alerts.length === 0 && (
+        <div className="py-12 text-center text-sm text-slate-400">
+          No active alerts.
+        </div>
+      )}
+    </Card>
+  );
+}

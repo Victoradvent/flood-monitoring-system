@@ -1,4 +1,248 @@
-import React,{useEffect,useState,useCallback} from 'react';import MapView from './MapView';import {subscribe} from './wsClient';import {requestPermission,showNotification,playAlertSound} from './notifications';import Badge from './components/ui/Badge';import Icon from './components/ui/Icon';
-const PHONE_KEY='resident_phone',POLL_MS=30000;function timeAgo(s){if(!s)return'No readings yet';const m=Math.round((Date.now()-new Date(s).getTime())/60000);if(m<1)return'just now';if(m<60)return`${m} min ago`;const h=Math.round(m/60);if(h<24)return`${h} hr ago`;return new Date(s).toLocaleString()}
-export default function ResidentDashboard(){const[phone,setPhone]=useState(''),[savedPhone,setSavedPhone]=useState(localStorage.getItem(PHONE_KEY)||''),[data,setData]=useState(null),[error,setError]=useState(''),[loading,setLoading]=useState(false);const fetchStatus=useCallback(async p=>{setLoading(true);setError('');try{const r=await fetch(`/resident/status?phone=${encodeURIComponent(p)}`);const b=await r.json();if(!r.ok)throw new Error(b.error||'Could not find your address');setData(b);localStorage.setItem(PHONE_KEY,p);setSavedPhone(p);requestPermission()}catch(e){setError(e.message);setData(null)}finally{setLoading(false)}},[]);useEffect(()=>{if(savedPhone)fetchStatus(savedPhone)},[savedPhone,fetchStatus]);useEffect(()=>{if(!savedPhone)return;const i=setInterval(()=>fetchStatus(savedPhone),POLL_MS);return()=>clearInterval(i)},[savedPhone,fetchStatus]);useEffect(()=>{if(!data||!data.nodes.length)return;const ids=new Set(data.nodes.map(n=>n.node_id));return subscribe(msg=>{if(msg.type==='reading'&&msg.payload&&ids.has(msg.payload.node_id)){const p=msg.payload;setData(prev=>({...prev,nodes:prev.nodes.map(n=>n.node_id===p.node_id?{...n,status:p.status||n.status,water_level_cm:p.water_level_cm,last_update:p.timestamp}:n)}))}if(msg.type==='alert'&&ids.has(msg.node)){if(msg.level==='CRITICAL'){showNotification('Flood Alert: CRITICAL',`Water level near you has reached ${msg.levelValue}cm. Move to higher ground.`);playAlertSound()}else showNotification('Flood Alert: WARNING',`Water level near you is rising (${msg.levelValue}cm). Stay alert.`)}})},[data]);const changeNumber=()=>{localStorage.removeItem(PHONE_KEY);setSavedPhone('');setData(null);setPhone('')};if(!data)return <div className="min-h-screen bg-slate-100 px-4 py-10"><div className="mx-auto max-w-lg rounded-2xl border border-slate-200 bg-white p-7 shadow-xl"><div className="mx-auto flex h-14 w-14 items-center justify-center rounded-xl bg-blue-50 text-blue-700"><Icon name="water" size={30}/></div><h1 className="mt-5 text-center text-2xl font-extrabold text-slate-900">Flood Alert Status</h1><p className="mt-2 text-center text-sm leading-6 text-slate-500">Enter the phone number you registered with your community coordinator to see the flood status for your area.</p><form onSubmit={e=>{e.preventDefault();if(phone.trim())fetchStatus(phone.trim())}} className="mt-6 space-y-3"><input className="input-field" placeholder="e.g. +2348000000001" value={phone} onChange={e=>setPhone(e.target.value)} required/><button className="primary-btn w-full" disabled={loading}>{loading?'Checking…':'Check Status'}</button></form>{error&&<p className="mt-4 rounded-lg bg-red-50 p-3 text-sm text-red-700">{error}</p>}</div></div>;
- const mapNodes={};data.nodes.forEach(n=>mapNodes[n.node_id]={node_id:n.node_id,status:n.status,water_level_cm:n.water_level_cm,timestamp:n.last_update,lat:n.lat,lng:n.lng});return <div className="min-h-screen bg-slate-100 px-4 py-6 sm:px-6"><div className="mx-auto max-w-5xl"><div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><div><p className="text-xs font-semibold uppercase tracking-widest text-blue-600">FMS Resident Portal</p><h1 className="mt-1 text-2xl font-extrabold text-slate-900">{data.resident_name?`Hello, ${data.resident_name}`:'Your Flood Status'}</h1></div><button onClick={changeNumber} className="secondary-btn text-xs">Use a different number</button></div>{loading&&<p className="mb-3 text-xs text-slate-500">Refreshing…</p>}{error&&<p className="mb-3 rounded-lg bg-red-50 p-3 text-sm text-red-700">{error}</p>}<div className="space-y-4">{data.nodes.map(n=><div key={n.node_id} className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm"><div className="flex items-start justify-between gap-3"><div><div className="flex items-center gap-2"><span className={`h-3 w-3 rounded-full ${n.status==='CRITICAL'?'bg-red-500':n.status==='WARNING'?'bg-amber-500':'bg-emerald-500'}`}/><h2 className="text-lg font-bold text-slate-900">{n.name}</h2></div><p className="mt-2"><Badge value={n.status}/></p></div><div className="text-right"><p className="text-2xl font-extrabold text-slate-900">{n.water_level_cm??'—'}<span className="ml-1 text-sm font-medium text-slate-400">cm</span></p><p className="text-[11px] text-slate-400">{timeAgo(n.last_update)}</p></div></div><p className="mt-4 text-sm leading-6 text-slate-600">{n.safety_message}</p>{n.recent_alerts.length>0&&<div className="mt-4 rounded-lg bg-slate-50 p-3"><p className="text-xs font-bold uppercase tracking-wide text-slate-500">Recent alerts</p><div className="mt-2 space-y-2">{n.recent_alerts.map((a,i)=><div key={i} className="flex items-center justify-between text-xs"><Badge value={a.level}/><span className="text-slate-500">{a.water_level_cm} cm · {timeAgo(a.triggered_at)}</span></div>)}</div></div>}</div>)}{data.nodes.length===0&&<div className="rounded-xl bg-white p-8 text-center text-sm text-slate-500">No monitoring point is currently linked to your number.</div>}{data.nodes.some(n=>n.lat&&n.lng)&&<div className="h-[360px] overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm"><MapView nodes={mapNodes}/></div>}</div></div></div>}
+import React, { useEffect, useState, useCallback } from "react";
+import MapView from "./MapView";
+import { subscribe } from "./wsClient";
+import {
+  requestPermission,
+  showNotification,
+  playAlertSound,
+} from "./notifications";
+import Badge from "./components/ui/Badge";
+import Icon from "./components/ui/Icon";
+const PHONE_KEY = "resident_phone",
+  POLL_MS = 30000;
+function timeAgo(s) {
+  if (!s) return "No readings yet";
+  const m = Math.round((Date.now() - new Date(s).getTime()) / 60000);
+  if (m < 1) return "just now";
+  if (m < 60) return `${m} min ago`;
+  const h = Math.round(m / 60);
+  if (h < 24) return `${h} hr ago`;
+  return new Date(s).toLocaleString();
+}
+export default function ResidentDashboard() {
+  const [phone, setPhone] = useState(""),
+    [savedPhone, setSavedPhone] = useState(
+      localStorage.getItem(PHONE_KEY) || "",
+    ),
+    [data, setData] = useState(null),
+    [error, setError] = useState(""),
+    [loading, setLoading] = useState(false);
+  const fetchStatus = useCallback(async (p) => {
+    setLoading(true);
+    setError("");
+    try {
+      const r = await fetch(`/resident/status?phone=${encodeURIComponent(p)}`);
+      const b = await r.json();
+      if (!r.ok) throw new Error(b.error || "Could not find your address");
+      setData(b);
+      localStorage.setItem(PHONE_KEY, p);
+      setSavedPhone(p);
+      requestPermission();
+    } catch (e) {
+      setError(e.message);
+      setData(null);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+  useEffect(() => {
+    if (savedPhone) fetchStatus(savedPhone);
+  }, [savedPhone, fetchStatus]);
+  useEffect(() => {
+    if (!savedPhone) return;
+    const i = setInterval(() => fetchStatus(savedPhone), POLL_MS);
+    return () => clearInterval(i);
+  }, [savedPhone, fetchStatus]);
+  useEffect(() => {
+    if (!data || !data.nodes.length) return;
+    const ids = new Set(data.nodes.map((n) => n.node_id));
+    return subscribe((msg) => {
+      if (
+        msg.type === "reading" &&
+        msg.payload &&
+        ids.has(msg.payload.node_id)
+      ) {
+        const p = msg.payload;
+        setData((prev) => ({
+          ...prev,
+          nodes: prev.nodes.map((n) =>
+            n.node_id === p.node_id
+              ? {
+                  ...n,
+                  status: p.status || n.status,
+                  water_level_cm: p.water_level_cm,
+                  last_update: p.timestamp,
+                }
+              : n,
+          ),
+        }));
+      }
+      if (msg.type === "alert" && ids.has(msg.node)) {
+        if (msg.level === "CRITICAL") {
+          showNotification(
+            "Flood Alert: CRITICAL",
+            `Water level near you has reached ${msg.levelValue}cm. Move to higher ground.`,
+          );
+          playAlertSound();
+        } else
+          showNotification(
+            "Flood Alert: WARNING",
+            `Water level near you is rising (${msg.levelValue}cm). Stay alert.`,
+          );
+      }
+    });
+  }, [data]);
+  const changeNumber = () => {
+    localStorage.removeItem(PHONE_KEY);
+    setSavedPhone("");
+    setData(null);
+    setPhone("");
+  };
+  if (!data)
+    return (
+      <div className="min-h-screen bg-slate-100 px-4 py-10">
+        <div className="mx-auto max-w-lg rounded-2xl border border-slate-200 bg-white p-7 shadow-xl">
+          <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-xl bg-blue-50 text-blue-700">
+            <Icon name="water" size={30} />
+          </div>
+          <h1 className="mt-5 text-center text-2xl font-extrabold text-slate-900">
+            Flood Alert Status
+          </h1>
+          <p className="mt-2 text-center text-sm leading-6 text-slate-500">
+            Enter the phone number you registered with your community
+            coordinator to see the flood status for your area.
+          </p>
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (phone.trim()) fetchStatus(phone.trim());
+            }}
+            className="mt-6 space-y-3"
+          >
+            <input
+              className="input-field"
+              placeholder="e.g. +2348000000001"
+              value={phone}
+              onChange={(e) => setPhone(e.target.value)}
+              required
+            />
+            <button className="primary-btn w-full" disabled={loading}>
+              {loading ? "Checking…" : "Check Status"}
+            </button>
+          </form>
+          {error && (
+            <p className="mt-4 rounded-lg bg-red-50 p-3 text-sm text-red-700">
+              {error}
+            </p>
+          )}
+        </div>
+      </div>
+    );
+  const mapNodes = {};
+  data.nodes.forEach(
+    (n) =>
+      (mapNodes[n.node_id] = {
+        node_id: n.node_id,
+        status: n.status,
+        water_level_cm: n.water_level_cm,
+        timestamp: n.last_update,
+        lat: n.lat,
+        lng: n.lng,
+      }),
+  );
+  return (
+    <div className="min-h-screen bg-slate-100 px-4 py-6 sm:px-6">
+      <div className="mx-auto max-w-5xl">
+        <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-widest text-blue-600">
+              FMS Resident Portal
+            </p>
+            <h1 className="mt-1 text-2xl font-extrabold text-slate-900">
+              {data.resident_name
+                ? `Hello, ${data.resident_name}`
+                : "Your Flood Status"}
+            </h1>
+          </div>
+          <button onClick={changeNumber} className="secondary-btn text-xs">
+            Use a different number
+          </button>
+        </div>
+        {loading && <p className="mb-3 text-xs text-slate-500">Refreshing…</p>}
+        {error && (
+          <p className="mb-3 rounded-lg bg-red-50 p-3 text-sm text-red-700">
+            {error}
+          </p>
+        )}
+        <div className="space-y-4">
+          {data.nodes.map((n) => (
+            <div
+              key={n.node_id}
+              className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm"
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span
+                      className={`h-3 w-3 rounded-full ${n.status === "CRITICAL" ? "bg-red-500" : n.status === "WARNING" ? "bg-amber-500" : "bg-emerald-500"}`}
+                    />
+                    <h2 className="text-lg font-bold text-slate-900">
+                      {n.name}
+                    </h2>
+                  </div>
+                  <p className="mt-2">
+                    <Badge value={n.status} />
+                  </p>
+                </div>
+                <div className="text-right">
+                  <p className="text-2xl font-extrabold text-slate-900">
+                    {n.water_level_cm ?? "—"}
+                    <span className="ml-1 text-sm font-medium text-slate-400">
+                      cm
+                    </span>
+                  </p>
+                  <p className="text-[11px] text-slate-400">
+                    {timeAgo(n.last_update)}
+                  </p>
+                </div>
+              </div>
+              <p className="mt-4 text-sm leading-6 text-slate-600">
+                {n.safety_message}
+              </p>
+              {n.recent_alerts.length > 0 && (
+                <div className="mt-4 rounded-lg bg-slate-50 p-3">
+                  <p className="text-xs font-bold uppercase tracking-wide text-slate-500">
+                    Recent alerts
+                  </p>
+                  <div className="mt-2 space-y-2">
+                    {n.recent_alerts.map((a, i) => (
+                      <div
+                        key={i}
+                        className="flex items-center justify-between text-xs"
+                      >
+                        <Badge value={a.level} />
+                        <span className="text-slate-500">
+                          {a.water_level_cm} cm · {timeAgo(a.triggered_at)}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          ))}
+          {data.nodes.length === 0 && (
+            <div className="rounded-xl bg-white p-8 text-center text-sm text-slate-500">
+              No monitoring point is currently linked to your number.
+            </div>
+          )}
+          {data.nodes.some((n) => n.lat && n.lng) && (
+            <div className="h-[360px] overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+              <MapView nodes={mapNodes} />
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}

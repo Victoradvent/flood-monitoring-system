@@ -15,6 +15,7 @@ Historical data & trending analysis
 ## Quick Start
 
 ### Local Development
+
 ```bash
 # Install dependencies
 cd backend && npm install
@@ -28,6 +29,7 @@ docker-compose up build
 ```
 
 **Access:**
+
 - Frontend: http://localhost:8080
 - Backend API: http://localhost:3000
 - MQTT Broker: localhost:1883
@@ -37,6 +39,7 @@ docker-compose up build
 **Choose your deployment platform:**
 
 #### Option A: DigitalOcean (Easiest - 5 min)
+
 - Free via GitHub Student Developer Pack ($50-100 credits)
 - Visual dashboard, click-to-deploy
 - Best for: Quick deployment, beginners
@@ -45,6 +48,7 @@ docker-compose up build
 - **See [DEPLOYMENT.md](./DEPLOYMENT.md)** for complete guide
 
 #### Option B: Oracle Cloud (Best Value - 30 min)
+
 - Truly FREE forever (always-free tier, no expiration)
 - Linux VM + PostgreSQL database included
 - Best for: Long-term hosting, learning, cost-conscious
@@ -90,19 +94,23 @@ flood-monitoring-system/
 ## API Endpoints
 
 ### Monitoring
+
 - `GET /health` - Health check
 - `GET /history?node=NODE_ID` - Historical readings
 
 ### Grid Equipment
+
 - `GET /grid` - List all equipment
 - `POST /grid/:id/cutoff` - Recommend cutoff for equipment
 
 ### Audit
+
 - `GET /audit` - All audit logs
 - `GET /audit/filter` - Filter logs by date/operator/action
 - `GET /audit/export/csv` - Export audit logs
 
 ### Alerts
+
 - `GET /alerts/daily` - Daily alert summary
 - `GET /alerts/weekly` - Weekly alert summary
 
@@ -131,6 +139,7 @@ JWT_SECRET=your_secret_key
 ## Technology Stack
 
 **Backend:**
+
 - Node.js + Express
 - PostgreSQL + PostGIS (geolocation)
 - MQTT (Eclipse Mosquitto)
@@ -138,6 +147,7 @@ JWT_SECRET=your_secret_key
 - WebSockets (real-time updates)
 
 **Frontend:**
+
 - React 18
 - Leaflet + Marker Cluster (maps)
 - Chart.js + Recharts (analytics)
@@ -145,6 +155,7 @@ JWT_SECRET=your_secret_key
 - MQTT client (live updates)
 
 **Infrastructure:**
+
 - Docker + Docker Compose
 - DigitalOcean App Platform
 - Nginx (production reverse proxy)
@@ -152,15 +163,17 @@ JWT_SECRET=your_secret_key
 ## Development
 
 ### Running Tests
+
 ```bash
 # Backend
 cd backend && npm test
 
-# Frontend  
+# Frontend
 cd react-dashboard && npm test
 ```
 
 ### Database Migrations
+
 ```bash
 # New migration
 cat > db/init/008_your_migration.sql
@@ -172,6 +185,7 @@ docker-compose up db
 ## Production
 
 See **[DEPLOYMENT.md](./DEPLOYMENT.md)** for:
+
 - GitHub Student Pack setup ($50-100 free credits)
 - DigitalOcean deployment step-by-step
 - Database setup & backups
@@ -183,6 +197,7 @@ See **[DEPLOYMENT.md](./DEPLOYMENT.md)** for:
 ## Monitoring & Maintenance
 
 ### Logs
+
 ```bash
 docker logs flood_backend
 docker logs flood_frontend
@@ -190,11 +205,13 @@ docker logs flood_mqtt
 ```
 
 ### Database Backup
+
 ```bash
 pg_dump postgresql://user:pass@host/db | gzip > backup.sql.gz
 ```
 
 ### Performance Tuning
+
 - Use connection pooling for database
 - Enable gzip compression
 - Cache static assets (1 year TTL)
@@ -203,16 +220,19 @@ pg_dump postgresql://user:pass@host/db | gzip > backup.sql.gz
 ## Troubleshooting
 
 **MQTT connection refused:**
+
 - Check broker is running: `docker ps | grep mosquitto`
 - Verify credentials in `.env`
 - Check network connectivity
 
 **Database connection failed:**
+
 - Verify DATABASE_URL format
 - Check database is running: `docker ps | grep postgres`
 - Ensure firewall allows connection
 
 **Frontend not loading:**
+
 - Check backend API is running: `curl http://localhost:3000/health`
 - Verify WebSocket proxy config in nginx.conf
 - Check browser console for errors
@@ -232,6 +252,7 @@ MIT License - see LICENSE file for details
 ## Support
 
 For issues or questions:
+
 1. Check [DEPLOYMENT.md](./DEPLOYMENT.md) for deployment questions
 2. Review logs: `docker-compose logs service_name`
 3. Create an issue in GitHub with logs and error details
