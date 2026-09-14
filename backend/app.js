@@ -128,6 +128,103 @@ app.use("/subscribers", subscribersRoutes);
 app.use("/resident", residentRoutes);
 app.use("/users", usersAdminRoutes);
 
+function profileFields(user, details = {}) {
+  const role = user.role;
+  const base = {
+    name: user.display_name || user.username,
+    username: user.username,
+    email: user.email || null,
+    role,
+    account_created_at: user.created_at,
+    last_login_at: user.last_login_at,
+  };
+
+  if (role === "admin") {
+    return {
+      ...base,
+      permission_level: "Administrator",
+      access_scope: user.assigned_zone || "All monitoring, grid, audit, and administration functions",
+    };
+  }
+  if (role === "operator") {
+    return {
+      ...base,
+      assigned_zone: user.assigned_zone || null,
+      shift_contact: user.shift_contact || null,
+    };
+  }
+  return {
+    ...base,
+    phone: details.phone || null,
+    monitored_zone: details.monitored_zone || null,
+    notification_preferences: user.notification_preferences || { sms: true, browser: true },
+  };
+}
+
+app.get("/profile", authMiddleware, async (req, res) => {
+  try {
+    const userResult = await pool.query(
+      `SELECT id, username, display_name, email, role, created_at,
+              last_login_at, assigned_zone, shift_contact,
+              notification_preferences
+         FROM users
+        WHERE id = $1`,
+      [req.user.user_id],
+    );
+    if (userResult.rows.length === 0) return res.status(404).json({ error: "profile not found" });
+
+    const user = userResult.rows[0];
+    let details = {};
+    if (user.role === "resident") {
+      const subscriberResult = await pool.query(
+        `SELECT s.phone, n.name AS monitored_zone
+           FROM subscribers s
+           LEFT JOIN nodes n ON n.node_id = s.node_id
+          WHERE s.phone = $1 AND s.active = TRUE
+          ORDER BY s.id
+          LIMIT 1`,
+        [user.username],
+      );
+      details = subscriberResult.rows[0] || {};
+    }
+    res.json(profileFields(user, details));
+  } catch (err) {
+    console.error("Profile lookup error", err);
+    res.status(500).json({ error: "internal" });
+  }
+});
+
+app.put("/profile", authMiddleware, async (req, res) => {
+  const allowed = ["display_name", "email", "assigned_zone", "shift_contact", "notification_preferences"];
+  const updates = Object.fromEntries(Object.entries(req.body || {}).filter(([key]) => allowed.includes(key)));
+  if (Object.keys(updates).length === 0) return res.status(400).json({ error: "no editable profile fields supplied" });
+  if (updates.notification_preferences !== undefined &&
+      (typeof updates.notification_preferences !== "object" || Array.isArray(updates.notification_preferences))) {
+    return res.status(400).json({ error: "notification_preferences must be an object" });
+  }
+
+  try {
+    const assignments = [];
+    const values = [];
+    Object.entries(updates).forEach(([key, value], index) => {
+      assignments.push(`${key} = $${index + 1}`);
+      values.push(key === "notification_preferences" ? JSON.stringify(value) : value || null);
+    });
+    values.push(req.user.user_id);
+    const result = await pool.query(
+      `UPDATE users SET ${assignments.join(", ")} WHERE id = $${values.length}
+       RETURNING id, username, display_name, email, role, created_at,
+                 last_login_at, assigned_zone, shift_contact, notification_preferences`,
+      values,
+    );
+    if (result.rows.length === 0) return res.status(404).json({ error: "profile not found" });
+    res.json(profileFields(result.rows[0]));
+  } catch (err) {
+    console.error("Profile update error", err);
+    res.status(500).json({ error: "internal" });
+  }
+});
+
 app.post("/login", express.json(), async (req, res) => {
   const { username, password } = req.body;
   const r = await pool.query("SELECT * FROM users WHERE username=$1", [
@@ -139,6 +236,8 @@ app.post("/login", express.json(), async (req, res) => {
   const user = r.rows[0];
   const match = await bcrypt.compare(password, user.password_hash);
   if (!match) return res.status(401).json({ error: "invalid credentials" });
+
+  await pool.query("UPDATE users SET last_login_at = NOW() WHERE id = $1", [user.id]);
 
   const token = jwt.sign(
     { user_id: user.id, username: user.username, role: user.role },

@@ -31,7 +31,99 @@ const titles = {
   nodes: "Nodes",
   audit: "Audit Logs",
   admin: "Administration",
+  profile: "Profile",
 };
+
+function Profile({ token, role }) {
+  const [profile, setProfile] = useState(null);
+  const [form, setForm] = useState({});
+  const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    fetch("/profile", { headers: { Authorization: `Bearer ${token}` } })
+      .then(async (res) => {
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Failed to load profile");
+        return data;
+      })
+      .then((data) => {
+        setProfile(data);
+        setForm({
+          name: data.name || "",
+          email: data.email || "",
+          assigned_zone: data.assigned_zone || "",
+          shift_contact: data.shift_contact || "",
+          phone: data.phone || "",
+          notification_preferences: data.notification_preferences || {},
+        });
+      })
+      .catch((err) => setError(err.message));
+  }, [token]);
+
+  const save = async (event) => {
+    event.preventDefault();
+    setMessage("");
+    setError("");
+    const body = { display_name: form.name, email: form.email };
+    if (role === "operator") body.shift_contact = form.shift_contact;
+    if (role === "resident") body.notification_preferences = form.notification_preferences;
+    try {
+      const res = await fetch("/profile", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to save profile");
+      setProfile(data);
+      setMessage("Profile updated");
+    } catch (err) {
+      setError(err.message);
+    }
+  };
+
+  if (error) return <Card title="Profile"><p className="p-4 text-sm text-red-700">{error}</p></Card>;
+  if (!profile) return <Card title="Profile"><p className="p-4 text-sm text-slate-500">Loading profile...</p></Card>;
+
+  const roleLabel = profile.role === "admin" ? "Administrator" : profile.role === "operator" ? "Operator" : "Resident";
+  const effectiveRole = profile.role;
+  return (
+    <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(300px,.8fr)]">
+      <Card title={`${roleLabel} profile`} subtitle="Account information and personal settings">
+        <form onSubmit={save} className="space-y-4">
+          <Editable label="Name" value={form.name} onChange={(value) => setForm({ ...form, name: value })} />
+          <Editable label="Username" value={profile.username} readOnly />
+          <Editable label="Email" value={form.email} onChange={(value) => setForm({ ...form, email: value })} />
+          {effectiveRole === "resident" && <Editable label="Phone" value={profile.phone || ""} readOnly />}
+          {effectiveRole === "operator" && <Editable label="Shift contact" value={form.shift_contact} onChange={(value) => setForm({ ...form, shift_contact: value })} />}
+          {effectiveRole === "resident" && <Preferences value={form.notification_preferences} onChange={(value) => setForm({ ...form, notification_preferences: value })} />}
+          {message && <p className="text-sm text-emerald-700">{message}</p>}
+          <button className="primary-btn" type="submit">Save editable fields</button>
+        </form>
+      </Card>
+      <Card title="System-managed information" subtitle="Read-only">
+        <div className="space-y-3 text-sm">
+          <ReadOnly label="Role" value={roleLabel} />
+          <ReadOnly label="Account created" value={formatDate(profile.account_created_at)} />
+          <ReadOnly label="Last login" value={formatDate(profile.last_login_at)} />
+          {effectiveRole === "admin" && <ReadOnly label="Permission level" value={profile.permission_level} />}
+          {effectiveRole === "admin" && <ReadOnly label="Access scope" value={profile.access_scope} />}
+          {effectiveRole === "operator" && <ReadOnly label="Assigned zone" value={profile.assigned_zone || "Not assigned"} />}
+          {effectiveRole === "resident" && <ReadOnly label="Monitored zone" value={profile.monitored_zone || "Not assigned"} />}
+        </div>
+        <p className="mt-5 border-t border-slate-100 pt-4 text-xs text-slate-500">Passwords, tokens, API keys, credentials, and other sensitive fields are never returned by the profile API.</p>
+      </Card>
+    </div>
+  );
+}
+
+function formatDate(value) { return value ? new Date(value).toLocaleString() : "Not available"; }
+function Editable({ label, value, onChange, readOnly = false }) {
+  return <label className="block text-sm font-medium text-slate-700">{label}<input className={`input-field mt-1 ${readOnly ? "bg-slate-100 text-slate-500" : ""}`} value={value} onChange={(event) => onChange?.(event.target.value)} readOnly={readOnly} /></label>;
+}
+function ReadOnly({ label, value }) { return <div><dt className="text-xs uppercase tracking-wide text-slate-400">{label}</dt><dd className="mt-1 rounded-md bg-slate-100 px-3 py-2 text-slate-600">{value || "Not available"}</dd></div>; }
+function Preferences({ value, onChange }) { return <fieldset><legend className="text-sm font-medium text-slate-700">Notification preferences</legend><div className="mt-2 space-y-2 text-sm text-slate-600"><label className="flex gap-2"><input type="checkbox" checked={value.sms !== false} onChange={(e) => onChange({ ...value, sms: e.target.checked })} /> SMS alerts</label><label className="flex gap-2"><input type="checkbox" checked={value.browser !== false} onChange={(e) => onChange({ ...value, browser: e.target.checked })} /> Browser alerts</label></div></fieldset>; }
 
 export default function App() {
   if (window.location.pathname.startsWith("/resident"))
@@ -382,6 +474,7 @@ export default function App() {
           <AuditTrends token={token} role={role} />
         </div>
       ),
+      profile: <Profile token={token} role={role} />,
     }[active] || dashboard;
 
   const navigate = (id) => {
