@@ -11,7 +11,12 @@ router.get(
   requireAnyRole(["admin", "operator"]),
   async (req, res) => {
     try {
-      const r = await pool.query("SELECT * FROM grid_equipment ORDER BY id");
+      const r = await pool.query(
+        `SELECT ge.*, ST_Y(ge.location::geometry) AS lat,
+                ST_X(ge.location::geometry) AS lng
+           FROM grid_equipment ge
+          ORDER BY ge.id`,
+      );
       res.json(r.rows);
     } catch (err) {
       res.status(500).json({ error: err.message });

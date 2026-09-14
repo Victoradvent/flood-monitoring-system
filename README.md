@@ -24,15 +24,32 @@ cd ../react-dashboard && npm install
 # Set up environment
 cp .env.example .env.local
 
-# Start with Docker
-docker-compose up build
+# Generate development-only MQTT certificates, then start with Docker
+./scripts/generate-dev-certs.ps1
+docker compose up --build
 ```
 
 **Access:**
 
 - Frontend: http://localhost:8080
 - Backend API: http://localhost:3000
-- MQTT Broker: localhost:1883
+- MQTT Broker: localhost:8883 (MQTT over TLS)
+
+### Self-contained simulation
+
+The default Compose configuration is deliberately self-contained for integration testing:
+
+```bash
+docker compose exec backend node scripts/simulate-hardware.js \
+	--nodes=6 --readings=18 --interval=300 \
+	--invalid-every=7 --signal-loss-every=5
+```
+
+This **SIMULATED** ESP32/SIM800L process emits the same JSON contract as `firmware/node.ino`, adds sensor noise and invalid readings, queues readings during simulated GSM signal loss, and flushes them after recovery. The backend uses `SMS_PROVIDER=simulated` by default; it logs recipient, message, delay, rate-limit, failure, and delivery status without contacting a third party.
+
+The six simulated transformer records are installed by `db/init/014_seed_simulated_grid_equipment.sql` and are visible in the operator map and Grid Monitor.
+
+The generated certificates under `mosquitto/certs` are **self-signed development-only certificates**. Replace the CA/server certificate and key with organization-issued certificates, use secret management, and review broker ACLs before production deployment. To use a real SMS provider, set `SMS_PROVIDER=twilio` or `SMS_PROVIDER=http_gateway` and provide the corresponding credentials; no application code change is required.
 
 ### Production Deployment
 

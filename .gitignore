@@ -44,3 +44,5 @@ coverage/
 # Temp files
 tmp/
 temp/
+mosquitto/certs/*.key
+mosquitto/certs/*.crt

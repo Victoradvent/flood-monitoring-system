@@ -86,8 +86,8 @@ export default function GridPanel({ token }) {
             <thead className="border-b border-slate-100 text-[10px] uppercase tracking-wider text-slate-400">
               <tr>
                 <th className="px-3 py-3">Equipment</th>
-                <th>Type</th>
-                <th>Location</th>
+                <th>Risk Zone</th>
+                <th>Coordinates</th>
                 <th>Status</th>
                 <th>Recommendation</th>
                 <th className="text-right">Action</th>
@@ -97,8 +97,8 @@ export default function GridPanel({ token }) {
               {equipment.map((x) => (
                 <tr key={x.id} className="hover:bg-slate-50">
                   <td className="px-3 py-3 font-semibold">{x.name}</td>
-                  <td>{x.type || "—"}</td>
-                  <td>{x.location || "—"}</td>
+                  <td><Badge value={x.risk_zone || "MEDIUM"} /></td>
+                  <td>{x.lat && x.lng ? `${Number(x.lat).toFixed(4)}, ${Number(x.lng).toFixed(4)}` : "—"}</td>
                   <td>
                     <Badge value={x.status || "NORMAL"} />
                   </td>

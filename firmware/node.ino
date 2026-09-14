@@ -8,7 +8,7 @@
    - WiFi and MQTT reconnection with exponential backoff
    - NTP-based ISO timestamp
    - Simple SPIFFS buffering for unsent payloads
-   - Placeholder for GSM fallback
+  - GSM fallback hook for transport failures
   Dependencies:
    - PubSubClient
    - ArduinoJson
@@ -20,6 +20,8 @@
 #include <ArduinoJson.h>
 #include "SPIFFS.h"
 #include <time.h>
+
+HardwareSerial gsmSerial(1);
 
 // ---------- CONFIG ----------
 /* WiFi */
@@ -33,6 +35,12 @@ const char* MQTT_USER = "mqtt_user";
 const char* MQTT_PASS = "mqtt_password";
 const char* MQTT_TOPIC = "nodes/flood";
 const char* NODE_ID = "NODE001";
+
+/* SIM800L fallback. Leave the number empty only when GSM is not installed. */
+const int GSM_RX_PIN = 16;
+const int GSM_TX_PIN = 17;
+const char* GSM_ALERT_NUMBER = "";
+const unsigned long GSM_BAUD = 9600;
 
 /* Ultrasonic pins */
 const int PIN_TRIG = 13;
@@ -68,11 +76,49 @@ int filterCount = 0;
 
 enum NodeStatus { NORMAL, WARNING, CRITICAL };
 NodeStatus currentStatus = NORMAL;
+unsigned long readingSequence = 0;
+unsigned int sensorFailureCount = 0;
 
 // Reconnection backoff
 unsigned long wifiBackoff = 1000;
 unsigned long mqttBackoff = 1000;
 const unsigned long MAX_BACKOFF = 60000;
+
+bool waitForGsmResponse(const char* expected, unsigned long timeoutMs) {
+  unsigned long started = millis();
+  String response;
+  while (millis() - started < timeoutMs) {
+    while (gsmSerial.available()) response += (char)gsmSerial.read();
+    if (response.indexOf(expected) >= 0) return true;
+    delay(10);
+  }
+  Serial.printf("GSM timeout waiting for %s; response=%s\n", expected, response.c_str());
+  return false;
+}
+
+bool gsmFallbackSend(const char* payload) {
+  if (GSM_ALERT_NUMBER[0] == '\0') {
+    Serial.println("GSM fallback unavailable: GSM_ALERT_NUMBER is not configured");
+    return false;
+  }
+
+  gsmSerial.println("AT");
+  if (!waitForGsmResponse("OK", 2000)) return false;
+  gsmSerial.println("AT+CMGF=1");
+  if (!waitForGsmResponse("OK", 2000)) return false;
+  gsmSerial.print("AT+CMGS=\"");
+  gsmSerial.print(GSM_ALERT_NUMBER);
+  gsmSerial.println("\"");
+  if (!waitForGsmResponse(">", 5000)) return false;
+  gsmSerial.print("Flood node ");
+  gsmSerial.print(NODE_ID);
+  gsmSerial.print(" transport fallback: ");
+  gsmSerial.print(payload);
+  gsmSerial.write(26);
+  if (!waitForGsmResponse("OK", 30000)) return false;
+  Serial.println("GSM fallback SMS sent");
+  return true;
+}
 
 // ---------- UTILITIES ----------
 
@@ -94,28 +140,46 @@ void appendToBuffer(const char* line) {
 
 void flushBuffer() {
   if (!SPIFFS.exists(BUFFER_FILE)) return;
-  File f = SPIFFS.open(BUFFER_FILE, FILE_READ);
-  if (!f) return;
-  // Read all lines and attempt to publish
-  while (f.available()) {
-    String line = f.readStringUntil('\n');
+  File input = SPIFFS.open(BUFFER_FILE, FILE_READ);
+  if (!input) {
+    Serial.println("Failed to open buffer file for flush");
+    return;
+  }
+  String remaining;
+  while (input.available()) {
+    String line = input.readStringUntil('\n');
     line.trim();
     if (line.length() == 0) continue;
     if (mqttClient.connected()) {
-      bool NORMAL = mqttClient.publish(MQTT_TOPIC, line.c_str());
-      if (!NORMAL) {
-        // stop trying further; keep remaining lines
-        f.close();
-        return;
+      if (!mqttClient.publish(MQTT_TOPIC, line.c_str())) {
+        remaining += line + "\n";
+        while (input.available()) {
+          remaining += input.readStringUntil('\n');
+          remaining += "\n";
+        }
+        break;
       }
     } else {
-      f.close();
-      return;
+      remaining += line + "\n";
+      while (input.available()) {
+        remaining += input.readStringUntil('\n');
+        remaining += "\n";
+      }
+      break;
     }
   }
-  f.close();
-  // If all published, remove file
+  input.close();
   SPIFFS.remove(BUFFER_FILE);
+  if (remaining.length() > 0) {
+    File output = SPIFFS.open(BUFFER_FILE, FILE_WRITE);
+    if (!output) {
+      Serial.println("Failed to restore unsent buffer after flush failure");
+      return;
+    }
+    output.print(remaining);
+    output.close();
+    Serial.println("MQTT buffer retained after incomplete flush");
+  }
 }
 
 /* NTP timer */
@@ -223,6 +287,7 @@ float readBatteryVoltage() {
 }
 
 float filteredReading(float newVal) {
+  if (newVal < 0) return -1.0;
   filterBuffer[filterIndex] = newVal;
   filterIndex = (filterIndex + 1) % FILTER_WINDOW;
   if (filterCount < FILTER_WINDOW) filterCount++;
@@ -251,17 +316,16 @@ NodeStatus evaluateStatus(float waterDepthCm) {
   return NORMAL;
 }
 
-void publishReading(float levelCm, float battV, NodeStatus status) {
+void publishReading(float levelCm, float battV, const char* status, const char* errorCode = nullptr) {
   StaticJsonDocument<256> doc;
   doc["node_id"] = NODE_ID;
   doc["timestamp"] = isoTimestamp();
-  doc["water_level_cm"] = levelCm;
+  doc["sequence"] = ++readingSequence;
+  if (levelCm >= 0) doc["water_level_cm"] = levelCm;
+  else doc["water_level_cm"] = nullptr;
   doc["battery_v"] = battV;
-  switch (status) {
-    case NORMAL: doc["status"] = "NORMAL"; break;
-    case WARNING: doc["status"] = "WARNING"; break;
-    case CRITICAL: doc["status"] = "CRITICAL"; break;
-  }
+  doc["status"] = status;
+  if (errorCode != nullptr) doc["error_code"] = errorCode;
   char payload[512];
   size_t n = serializeJson(doc, payload, sizeof(payload));
 
@@ -270,6 +334,9 @@ void publishReading(float levelCm, float battV, NodeStatus status) {
     if (!NORMAL) {
       Serial.println("MQTT publish failed, buffering");
       appendToBuffer(payload);
+      if (strcmp(status, "WARNING") == 0 || strcmp(status, "CRITICAL") == 0) {
+        gsmFallbackSend(payload);
+      }
     } else {
       Serial.println("Published payload:");
       Serial.println(payload);
@@ -277,13 +344,10 @@ void publishReading(float levelCm, float battV, NodeStatus status) {
   } else {
     Serial.println("MQTT not connected, buffering payload");
     appendToBuffer(payload);
+    if (strcmp(status, "WARNING") == 0 || strcmp(status, "CRITICAL") == 0) {
+      gsmFallbackSend(payload);
+    }
   }
-}
-
-/* Placeholder GSM fallback - implement SIM800L AT sequence here */
-void gsmFallbackSend(const char* payload) {
-  // Implement GSM POST or SMS via SIM800L
-  // Example: send SMS to gateway number with payload summary
 }
 
 // ---------- SETUP ----------
@@ -294,6 +358,7 @@ void setup() {
   pinMode(PIN_TRIG, OUTPUT);
   pinMode(PIN_ECHO, INPUT);
   pinMode(PIN_BATT, INPUT);
+  gsmSerial.begin(GSM_BAUD, SERIAL_8N1, GSM_RX_PIN, GSM_TX_PIN);
 
   // initialize filter buffer
   for (int i = 0; i < FILTER_WINDOW; ++i) filterBuffer[i] = 0.0;
@@ -325,16 +390,22 @@ void loop() {
     unsigned long dur = pingUltrasonic();
     float sensorDistance = durationToCm(dur);
     if (sensorDistance < 0) {
-      Serial.println("Ultrasonic timeout or error");
+      sensorFailureCount++;
+      Serial.printf("SENSOR_ERROR: ultrasonic timeout (consecutive=%u)\n", sensorFailureCount);
+      publishReading(-1.0, readBatteryVoltage(), "SENSOR_ERROR", "ULTRASONIC_TIMEOUT");
       return;
     }
 
     /* CRITICAL: Convert sensor distance to actual water depth */
     float waterDepth = distanceToWaterDepth(sensorDistance);
     if (waterDepth < 0) {
-      Serial.println("Invalid water depth reading (out of range)");
+      sensorFailureCount++;
+      Serial.printf("SENSOR_ERROR: invalid water depth (consecutive=%u)\n", sensorFailureCount);
+      publishReading(-1.0, readBatteryVoltage(), "SENSOR_ERROR", "OUT_OF_RANGE");
       return;
     }
+
+    sensorFailureCount = 0;
 
     Serial.printf("Sensor distance: %.1f cm, Water depth: %.1f cm\n", sensorDistance, waterDepth);
 
@@ -348,10 +419,9 @@ void loop() {
       // Optionally: immediate publish and backend will trigger SMS
     }
 
-    publishReading(filtered, batt, currentStatus);
-
-    // If MQTT disconnected and GSM available, you can call gsmFallbackSend
-    // Example: if (!mqttClient.connected()) gsmFallbackSend(payload);
+    const char* statusText = currentStatus == CRITICAL ? "CRITICAL" :
+      currentStatus == WARNING ? "WARNING" : "NORMAL";
+    publishReading(filtered, batt, statusText);
 
     // Try to flush buffered messages if connected
     if (mqttClient.connected()) flushBuffer();

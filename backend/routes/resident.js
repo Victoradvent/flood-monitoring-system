@@ -2,6 +2,21 @@ const express = require("express");
 const router = express.Router();
 const pool = require("../db");
 
+const lookupAttempts = new Map();
+const LOOKUP_WINDOW_MS = 15 * 60 * 1000;
+const LOOKUP_LIMIT = 10;
+
+function allowLookup(ip) {
+  const now = Date.now();
+  const existing = lookupAttempts.get(ip);
+  if (!existing || now - existing.startedAt >= LOOKUP_WINDOW_MS) {
+    lookupAttempts.set(ip, { startedAt: now, count: 1 });
+    return true;
+  }
+  existing.count += 1;
+  return existing.count <= LOOKUP_LIMIT;
+}
+
 // Residents are not dashboard "users" - they exist only as rows in `subscribers`
 // (name, phone, node_id, role='resident'), the same table SMS alerts are sent from.
 // So instead of a username/password login, a resident identifies themselves by the
@@ -33,6 +48,9 @@ router.get("/status", async (req, res) => {
   const phone = normalizePhone(req.query.phone);
   if (!phone) {
     return res.status(400).json({ error: "phone query parameter is required" });
+  }
+  if (!allowLookup(req.ip)) {
+    return res.status(429).json({ error: "Too many status lookups; try again later" });
   }
 
   try {

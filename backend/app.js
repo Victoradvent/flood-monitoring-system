@@ -8,6 +8,8 @@ const Twilio = require("twilio");
 const jwt = require("jsonwebtoken");
 const bcrypt = require("bcrypt");
 const cors = require("cors");
+const fs = require("fs");
+const { createSmsProvider } = require("./services/smsProvider");
 const { logAudit } = require("./utils/audit");
 const {
   authenticateToken,
@@ -51,6 +53,16 @@ const {
   SMS_GATEWAY_APIKEY,
   SMS_GATEWAY_FROM,
   ALERT_COOLDOWN_SEC = 900,
+  WARNING_LEVEL_CM = 30,
+  CRITICAL_LEVEL_CM = 50,
+  SMS_PROVIDER = "simulated",
+  SMS_SIM_FAILURE_RATE = 0.2,
+  SMS_SIM_RATE_LIMIT = 10,
+  SMS_SIM_MIN_DELAY_MS = 100,
+  SMS_SIM_MAX_DELAY_MS = 500,
+  SMS_SIM_SEED = "fms-sms",
+  MQTT_TLS = "false",
+  MQTT_CA_FILE,
   PORT = 3000,
 } = process.env;
 
@@ -59,7 +71,7 @@ if (!SECRET) {
   console.error("FATAL: JWT_SECRET environment variable is required");
   process.exit(1);
 }
-const mqttUrl = `mqtt://${MQTT_BROKER}:${MQTT_PORT}`;
+const mqttUrl = `${String(MQTT_TLS).toLowerCase() === "true" ? "mqtts" : "mqtt"}://${MQTT_BROKER}:${MQTT_PORT}`;
 
 // Twilio client (if configured)
 const twilioClient =
@@ -67,8 +79,22 @@ const twilioClient =
     ? new Twilio(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
     : null;
 
+const smsProvider = createSmsProvider({
+  mode: SMS_PROVIDER,
+  twilioClient,
+  from: TWILIO_FROM || SMS_GATEWAY_FROM,
+  gatewayUrl: SMS_GATEWAY_URL,
+  gatewayApiKey: SMS_GATEWAY_APIKEY,
+  failureRate: SMS_SIM_FAILURE_RATE,
+  rateLimitPerMinute: SMS_SIM_RATE_LIMIT,
+  minDelayMs: SMS_SIM_MIN_DELAY_MS,
+  maxDelayMs: SMS_SIM_MAX_DELAY_MS,
+  seed: SMS_SIM_SEED,
+});
+
 // In-memory cooldown map: { "<node_id>::<level>": timestamp }
 const cooldownMap = new Map();
+const nodeStatusMap = new Map();
 
 // WebSocket server for dashboard
 const app = express();
@@ -302,6 +328,14 @@ const mqttOptions = {
   password: MQTT_PASS,
   reconnectPeriod: 5000,
 };
+if (String(MQTT_TLS).toLowerCase() === "true") {
+  if (!MQTT_CA_FILE || !fs.existsSync(MQTT_CA_FILE)) {
+    console.error("FATAL: MQTT_TLS=true requires a readable MQTT_CA_FILE");
+    process.exit(1);
+  }
+  mqttOptions.ca = fs.readFileSync(MQTT_CA_FILE);
+  mqttOptions.rejectUnauthorized = true;
+}
 const client = mqtt.connect(mqttUrl, mqttOptions);
 
 client.on("connect", () => {
@@ -318,14 +352,27 @@ client.on("error", (err) => console.error("MQTT error", err));
 function parsePayload(msg) {
   try {
     const obj = JSON.parse(msg.toString());
-    // expected fields: node_id, timestamp, water_level_cm, battery_v, status
-    if (
-      !obj.node_id ||
-      !obj.timestamp ||
-      typeof obj.water_level_cm !== "number"
-    ) {
-      throw new Error("Invalid payload");
-    }
+    if (typeof obj.node_id !== "string" || !/^[A-Za-z0-9_-]{1,64}$/.test(obj.node_id))
+      throw new Error("node_id must be a safe identifier");
+    const timestampMs = typeof obj.timestamp === "string" ? Date.parse(obj.timestamp) : NaN;
+    if (!Number.isFinite(timestampMs))
+      throw new Error("timestamp must be a valid ISO date");
+    if (timestampMs - Date.now() > 60 * 1000)
+      throw new Error("timestamp is in the future");
+    if (obj.water_level_cm !== null &&
+        (typeof obj.water_level_cm !== "number" || !Number.isFinite(obj.water_level_cm)))
+      throw new Error("water_level_cm must be finite or null");
+    if (obj.water_level_cm !== null && (obj.water_level_cm < 0 || obj.water_level_cm > 1000))
+      throw new Error("water_level_cm is out of range");
+    if (obj.battery_v !== undefined && obj.battery_v !== null &&
+        (typeof obj.battery_v !== "number" || !Number.isFinite(obj.battery_v) || obj.battery_v < 0 || obj.battery_v > 6))
+      throw new Error("battery_v is out of range");
+    if (!["NORMAL", "WARNING", "CRITICAL", "SENSOR_ERROR"].includes(obj.status))
+      throw new Error("status is invalid");
+    if (obj.status === "SENSOR_ERROR" && obj.water_level_cm !== null)
+      throw new Error("sensor errors must not contain a water level");
+    if (obj.status !== "SENSOR_ERROR" && typeof obj.water_level_cm !== "number")
+      throw new Error("normal readings require a water level");
     return obj;
   } catch (e) {
     console.error("Payload parse error", e.message);
@@ -341,8 +388,8 @@ async function saveReading(payload, raw) {
     payload.node_id,
     payload.timestamp,
     payload.water_level_cm,
-    payload.battery_v || null,
-    payload.status || "NORMAL",
+    payload.battery_v ?? null,
+    payload.status,
     raw,
   ];
   const res = await pool.query(q, vals);
@@ -486,6 +533,26 @@ async function sendSmsHttp(to, body) {
   return resp.data;
 }
 
+async function sendSms(to, body) {
+  let lastError;
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      return {
+        provider: SMS_PROVIDER === "simulated" || SMS_PROVIDER === "mock" ? "simulated_sms" : SMS_PROVIDER,
+        response: await smsProvider.send(to, body),
+      };
+    } catch (err) {
+      lastError = err;
+      const status = err.response?.status || err.status;
+      const retryable = !status || status === 408 || status === 429 || status >= 500;
+      console.error(`SMS attempt ${attempt}/3 failed for ${to}: ${err.message}`);
+      if (!retryable || attempt === 3) break;
+      await new Promise((resolve) => setTimeout(resolve, 250 * 2 ** (attempt - 1)));
+    }
+  }
+  throw lastError;
+}
+
 // Compose alert message
 function composeAlertMessage(node_id, level, levelValue, timestamp) {
   return `ALERT ${level} at ${node_id}: water level ${levelValue} cm at ${timestamp}. Avoid flooded areas and stay clear of electrical equipment.`;
@@ -536,15 +603,9 @@ async function handleAlert(payload) {
     let deliveryStatus = "FAILED";
     let response = null;
     try {
-      if (twilioClient) {
-        const resp = await sendSmsTwilio(recipient.phone, body);
-        provider = "twilio";
-        response = resp;
-      } else {
-        const resp = await sendSmsHttp(recipient.phone, body);
-        provider = "http_gateway";
-        response = resp;
-      }
+      const delivery = await sendSms(recipient.phone, body);
+      provider = delivery.provider;
+      response = delivery.response;
       deliveryStatus = "SENT";
       sentCount += 1;
       providerResp = response;
@@ -554,8 +615,8 @@ async function handleAlert(payload) {
       response = { error: err.message };
     }
     await pool.query(
-      `INSERT INTO alert_recipients (alert_id, subscriber_id, status, delivery_provider, provider_response, sent_at)
-       VALUES ($1,$2,$3,$4,$5,$6)`,
+      `INSERT INTO alert_recipients (alert_id, subscriber_id, status, delivery_provider, provider_response, sent_at, attempts, next_attempt_at, last_error)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
       [
         alertId,
         recipient.id,
@@ -563,6 +624,9 @@ async function handleAlert(payload) {
         provider,
         response,
         deliveryStatus === "SENT" ? new Date() : null,
+        3,
+        deliveryStatus === "SENT" ? null : new Date(Date.now() + 60000),
+        deliveryStatus === "SENT" ? null : response?.error || "delivery failed",
       ],
     );
   }
@@ -571,7 +635,7 @@ async function handleAlert(payload) {
     "UPDATE alerts SET sent=$1, provider=$2, provider_response=$3 WHERE id=$4",
     [sentCount > 0, provider, providerResp, alertId],
   );
-  setCooldown(node, level);
+  if (sentCount > 0) setCooldown(node, level);
 
   // Broadcast alert to dashboard
   broadcast({
@@ -584,13 +648,80 @@ async function handleAlert(payload) {
   });
 }
 
+async function retryFailedDeliveries() {
+  const result = await pool.query(`
+    SELECT ar.id, ar.alert_id, ar.subscriber_id, ar.attempts,
+           a.node_id, a.alert_level, a.water_level_cm, a.triggered_at,
+           s.phone
+      FROM alert_recipients ar
+      JOIN alerts a ON a.id = ar.alert_id
+      JOIN subscribers s ON s.id = ar.subscriber_id
+     WHERE ar.status = 'FAILED'
+       AND ar.attempts < 8
+       AND (ar.next_attempt_at IS NULL OR ar.next_attempt_at <= NOW())
+     ORDER BY ar.id
+     LIMIT 50
+  `);
+
+  for (const delivery of result.rows) {
+    const body = composeAlertMessage(
+      delivery.node_id,
+      delivery.alert_level,
+      delivery.water_level_cm,
+      delivery.triggered_at,
+    );
+    try {
+      const sent = await sendSms(delivery.phone, body);
+      await pool.query(
+        `UPDATE alert_recipients
+            SET status='SENT', delivery_provider=$1, provider_response=$2,
+                sent_at=NOW(), attempts=attempts+1, next_attempt_at=NULL, last_error=NULL
+          WHERE id=$3`,
+        [sent.provider, sent.response, delivery.id],
+      );
+      await pool.query(
+        `UPDATE alerts SET sent=TRUE, provider=$1, provider_response=$2 WHERE id=$3`,
+        [sent.provider, sent.response, delivery.alert_id],
+      );
+      console.log(`Retried SMS delivery ${delivery.id} successfully`);
+    } catch (err) {
+      const nextAttempt = Math.min(delivery.attempts + 1, 8);
+      const delayMs = Math.min(15 * 60 * 1000, 1000 * 2 ** nextAttempt);
+      await pool.query(
+        `UPDATE alert_recipients
+            SET attempts=attempts+1, next_attempt_at=NOW() + ($1 * INTERVAL '1 second'), last_error=$2
+          WHERE id=$3`,
+        [Math.ceil(delayMs / 1000), err.message, delivery.id],
+      );
+      console.error(`SMS retry ${delivery.id} failed; next attempt scheduled`, err.message);
+    }
+  }
+}
+
+setInterval(() => {
+  retryFailedDeliveries().catch((err) => console.error("SMS retry worker error", err));
+}, 60000).unref();
+
 // Server-side threshold evaluation (optional redundancy)
 function serverEvaluateStatus(payload) {
+  if (payload.status === "SENSOR_ERROR" || payload.water_level_cm === null) {
+    return "SENSOR_ERROR";
+  }
   const waterLevelCm = Number(payload.water_level_cm);
+  const previous = nodeStatusMap.get(payload.node_id) || "NORMAL";
 
-  if (waterLevelCm >= 50) return "CRITICAL";
-  if (waterLevelCm >= 30) return "WARNING";
-  return "NORMAL";
+  let next = previous;
+  if (previous === "CRITICAL") {
+    if (waterLevelCm < Number(CRITICAL_LEVEL_CM) - 3)
+      next = waterLevelCm < Number(WARNING_LEVEL_CM) - 3 ? "NORMAL" : "WARNING";
+  } else if (previous === "WARNING") {
+    if (waterLevelCm >= Number(CRITICAL_LEVEL_CM)) next = "CRITICAL";
+    else if (waterLevelCm < Number(WARNING_LEVEL_CM) - 3) next = "NORMAL";
+  } else if (waterLevelCm >= Number(CRITICAL_LEVEL_CM)) next = "CRITICAL";
+  else if (waterLevelCm >= Number(WARNING_LEVEL_CM)) next = "WARNING";
+
+  nodeStatusMap.set(payload.node_id, next);
+  return next;
 }
 
 // MQTT message handler
@@ -599,7 +730,14 @@ client.on("message", async (topic, message) => {
     const payload = parsePayload(message);
     if (!payload) return;
 
-    // server-side status evaluation (redundant safety)
+    const nodeResult = await pool.query(
+      "SELECT lat, lng FROM nodes WHERE node_id = $1",
+      [payload.node_id],
+    );
+    if (nodeResult.rows.length === 0) {
+      throw new Error(`Unknown sensor node ${payload.node_id}`);
+    }
+
     payload.status = serverEvaluateStatus(payload);
 
     // Save reading
@@ -607,12 +745,8 @@ client.on("message", async (topic, message) => {
 
     // Enrich with coordinates
     try {
-      const q = "SELECT lat, lng FROM nodes WHERE node_id = $1";
-      const r = await pool.query(q, [payload.node_id]);
-      if (r.rows.length > 0) {
-        payload.lat = r.rows[0].lat;
-        payload.lng = r.rows[0].lng;
-      }
+      payload.lat = nodeResult.rows[0].lat;
+      payload.lng = nodeResult.rows[0].lng;
     } catch (err) {
       console.error("Node lookup error", err);
     }

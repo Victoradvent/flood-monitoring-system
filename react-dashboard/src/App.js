@@ -20,6 +20,8 @@ import Badge from "./components/ui/Badge";
 import Icon from "./components/ui/Icon";
 import { subscribe } from "./wsClient";
 
+const NODE_STALE_MS = 120000;
+
 const titles = {
   dashboard: "Dashboard",
   map: "Map",
@@ -36,6 +38,7 @@ export default function App() {
     return <ResidentDashboard />;
 
   const [nodes, setNodes] = useState({});
+  const [equipment, setEquipment] = useState([]);
   const [log, setLog] = useState([]);
   const [selectedNode, setSelectedNode] = useState(null);
   const [token, setToken] = useState(localStorage.getItem("jwt"));
@@ -69,12 +72,47 @@ export default function App() {
               ...next[n.node_id],
               ...n,
               status: next[n.node_id]?.status || "NORMAL",
+              stale: true,
             };
           });
           return next;
         }),
       )
       .catch((err) => console.error("Initial node fetch error", err));
+  }, [token]);
+
+  useEffect(() => {
+    if (!token || !["admin", "operator"].includes(role)) return undefined;
+    fetch("/grid", { headers: { Authorization: `Bearer ${token}` } })
+      .then(async (res) => {
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Failed to load equipment");
+        return data;
+      })
+      .then(setEquipment)
+      .catch((err) => console.error("Initial equipment fetch error", err));
+    return undefined;
+  }, [role, token]);
+
+  useEffect(() => {
+    if (!token) return undefined;
+    const updateStaleState = () => {
+      const now = Date.now();
+      setNodes((prev) => {
+        const next = { ...prev };
+        Object.keys(next).forEach((nodeId) => {
+          const timestamp = next[nodeId].timestamp;
+          next[nodeId] = {
+            ...next[nodeId],
+            stale: !timestamp || now - new Date(timestamp).getTime() > NODE_STALE_MS,
+          };
+        });
+        return next;
+      });
+    };
+    updateStaleState();
+    const interval = setInterval(updateStaleState, 15000);
+    return () => clearInterval(interval);
   }, [token]);
 
   useEffect(() => {
@@ -111,6 +149,7 @@ export default function App() {
             water_level_cm: p.water_level_cm,
             battery_v: p.battery_v,
             status: p.status || "NORMAL",
+            stale: false,
             lat: p.lat ?? prev[p.node_id]?.lat,
             lng: p.lng ?? prev[p.node_id]?.lng,
           },
@@ -139,10 +178,10 @@ export default function App() {
     () => ({
       total: nodeList.length,
       ok: nodeList.filter(
-        (n) => (n.status || "NORMAL") === "NORMAL" || n.status === "OK",
+        (n) => !n.stale && ((n.status || "NORMAL") === "NORMAL" || n.status === "OK"),
       ).length,
-      warning: nodeList.filter((n) => n.status === "WARNING").length,
-      critical: nodeList.filter((n) => n.status === "CRITICAL").length,
+      warning: nodeList.filter((n) => !n.stale && n.status === "WARNING").length,
+      critical: nodeList.filter((n) => !n.stale && n.status === "CRITICAL").length,
     }),
     [nodeList],
   );
@@ -213,7 +252,7 @@ export default function App() {
           className="min-h-[480px]"
         >
           <div className="h-[410px] overflow-hidden rounded-lg border border-slate-100">
-            <MapView nodes={nodes} />
+            <MapView nodes={nodes} equipment={equipment} />
           </div>
         </Card>
         <div className="space-y-5">
@@ -270,11 +309,11 @@ export default function App() {
                   {nodeList.slice(0, 6).map((n) => (
                     <tr key={n.node_id}>
                       <td className="py-2.5 font-semibold text-slate-700">
-                        {n.node_id}
+                        {n.node_id}{n.stale ? " (STALE)" : ""}
                       </td>
                       <td className="py-2.5">{n.water_level_cm ?? "—"} cm</td>
                       <td className="py-2.5">
-                        <Badge value={n.status || "NORMAL"} />
+                        <Badge value={n.stale ? "STALE" : n.status || "NORMAL"} />
                       </td>
                       <td className="py-2.5">{n.battery_v ?? "—"} V</td>
                     </tr>
@@ -303,7 +342,7 @@ export default function App() {
           className="h-[calc(100vh-120px)]"
         >
           <div className="h-[calc(100vh-210px)] overflow-hidden rounded-lg">
-            <MapView nodes={nodes} />
+            <MapView nodes={nodes} equipment={equipment} />
           </div>
         </Card>
       ),

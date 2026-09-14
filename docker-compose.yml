@@ -14,16 +14,15 @@ services:
       - floodnet
 
   mqtt:
-    image: eclipse-mosquitto:2
+    build: ./mosquitto
     container_name: flood_mqtt
     restart: always
     volumes:
-      - ./mosquitto/config/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
       - mosquitto_data:/mosquitto/data
       - mosquitto_log:/mosquitto/log
     ports:
-      - "1883:1883"
-      - "9001:9001"
+      - "8883:8883"
+      - "9002:9002"
     networks:
       - floodnet
 
@@ -42,16 +41,27 @@ services:
       PG_DB: ${POSTGRES_DB}
 
       MQTT_BROKER: mqtt
-      MQTT_PORT: 1883
+      MQTT_PORT: 8883
       MQTT_USER: ${MQTT_USER}
       MQTT_PASS: ${MQTT_PASS}
       MQTT_TOPIC: nodes/flood
+      MQTT_TLS: ${MQTT_TLS:-true}
+      MQTT_CA_FILE: /run/mqtt-certs/ca.crt
+
+      SMS_PROVIDER: ${SMS_PROVIDER:-simulated}
+      SMS_SIM_FAILURE_RATE: ${SMS_SIM_FAILURE_RATE:-0.2}
+      SMS_SIM_RATE_LIMIT: ${SMS_SIM_RATE_LIMIT:-10}
+      SMS_SIM_MIN_DELAY_MS: ${SMS_SIM_MIN_DELAY_MS:-100}
+      SMS_SIM_MAX_DELAY_MS: ${SMS_SIM_MAX_DELAY_MS:-500}
+      SMS_SIM_SEED: ${SMS_SIM_SEED:-fms-sms}
 
       JWT_SECRET: ${JWT_SECRET}
       PORT: 3000
     depends_on:
       - db
       - mqtt
+    volumes:
+      - ./mosquitto/certs:/run/mqtt-certs:ro
     ports:
       - "3000:3000"
     networks:
