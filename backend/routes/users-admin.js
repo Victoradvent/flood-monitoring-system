@@ -4,7 +4,7 @@ const bcrypt = require("bcrypt");
 const pool = require("../db");
 const { authMiddleware, requireRole } = require("../auth");
 
-const ALLOWED_ROLES = ["admin", "operator"];
+const ALLOWED_ROLES = ["admin", "operator", "resident"];
 const SALT_ROUNDS = 10;
 
 // List dashboard accounts (never returns password_hash)

@@ -107,6 +107,7 @@ export default function AdminUserPanel({ token }) {
           >
             <option value="operator">Operator</option>
             <option value="admin">Admin</option>
+            <option value="resident">Resident</option>
           </select>
           <button className="primary-btn w-full" type="submit">
             <Icon name="plus" size={16} />

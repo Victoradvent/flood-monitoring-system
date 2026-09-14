@@ -66,8 +66,8 @@ function Profile({ token, role }) {
     setMessage("");
     setError("");
     const body = { display_name: form.name, email: form.email };
-    if (role === "operator") body.shift_contact = form.shift_contact;
-    if (role === "resident") body.notification_preferences = form.notification_preferences;
+    if (profile?.role === "operator") body.shift_contact = form.shift_contact;
+    if (profile?.role === "resident") body.notification_preferences = form.notification_preferences;
     try {
       const res = await fetch("/profile", {
         method: "PUT",
