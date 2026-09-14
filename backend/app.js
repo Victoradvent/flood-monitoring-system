@@ -585,6 +585,13 @@ async function handleAlert(payload) {
 }
 
 // Server-side threshold evaluation (optional redundancy)
+function serverEvaluateStatus(payload) {
+  const waterLevelCm = Number(payload.water_level_cm);
+
+  if (waterLevelCm >= 50) return "CRITICAL";
+  if (waterLevelCm >= 30) return "WARNING";
+  return "NORMAL";
+}
 
 // MQTT message handler
 client.on("message", async (topic, message) => {

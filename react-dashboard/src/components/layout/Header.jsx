@@ -1,5 +1,11 @@
 import Icon from "../ui/Icon";
-export default function Header({ title, role, onMenu, onLogout }) {
+export default function Header({
+  title,
+  role,
+  onMenu,
+  onLogout,
+  alertCount = 0,
+}) {
   return (
     <header className="flex h-16 items-center justify-between border-b border-slate-200 bg-white px-4 sm:px-6">
       <div className="flex items-center gap-3">
@@ -21,7 +27,11 @@ export default function Header({ title, role, onMenu, onLogout }) {
       <div className="flex items-center gap-4">
         <button className="relative rounded-lg p-2 text-slate-500 hover:bg-slate-100">
           <Icon name="bell" size={18} />
-          <span className="absolute right-1.5 top-1.5 h-1.5 w-1.5 rounded-full bg-red-500" />
+          {alertCount > 0 && (
+            <span className="absolute right-0.5 top-0.5 min-w-4 rounded-full bg-red-500 px-1 text-center text-[9px] font-bold leading-4 text-white">
+              {alertCount}
+            </span>
+          )}
         </button>
         <div className="hidden h-7 w-px bg-slate-200 sm:block" />
         <button

@@ -1,7 +1,14 @@
 import React from "react";
 import Icon from "../ui/Icon";
 
-export default function Sidebar({ active, onNavigate, onLogout, role }) {
+export default function Sidebar({
+  active,
+  onNavigate,
+  onLogout,
+  role,
+  alertCount = 0,
+  className = "",
+}) {
   const items = [
     ["dashboard", "Dashboard", "home"],
     ["map", "Map", "map"],
@@ -14,7 +21,9 @@ export default function Sidebar({ active, onNavigate, onLogout, role }) {
   ];
 
   return (
-    <aside className="flex h-full w-64 flex-col bg-slate-950 text-white">
+    <aside
+      className={`sticky top-0 flex h-screen w-64 shrink-0 flex-col bg-slate-950 text-white ${className}`}
+    >
       {/* Logo */}
       <div className="flex h-16 items-center gap-3 border-b border-white/10 px-5">
         <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-white/10">
@@ -50,9 +59,9 @@ export default function Sidebar({ active, onNavigate, onLogout, role }) {
 
               <span>{label}</span>
 
-              {id === "alerts" && (
+              {id === "alerts" && alertCount > 0 && (
                 <span className="ml-auto rounded-full bg-red-500 px-1.5 py-0.5 text-[10px] font-bold">
-                  3
+                  {alertCount}
                 </span>
               )}
             </button>

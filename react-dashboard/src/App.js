@@ -42,6 +42,7 @@ export default function App() {
   const [role, setRole] = useState(localStorage.getItem("role"));
   const [active, setActive] = useState("dashboard");
   const [mobileMenu, setMobileMenu] = useState(false);
+  const [alertCount, setAlertCount] = useState(0);
 
   const logout = () => {
     localStorage.removeItem("jwt");
@@ -77,6 +78,26 @@ export default function App() {
   }, [token]);
 
   useEffect(() => {
+    if (!token || !["admin", "operator"].includes(role)) return undefined;
+
+    const loadAlertCount = () =>
+      fetch("/alerts", { headers: { Authorization: `Bearer ${token}` } })
+        .then(async (res) => {
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.error || "Failed to load alerts");
+          return data;
+        })
+        .then((alerts) =>
+          setAlertCount(alerts.filter((alert) => !alert.acknowledged).length),
+        )
+        .catch((err) => console.error("Alert count fetch error", err));
+
+    loadAlertCount();
+    const interval = setInterval(loadAlertCount, 10000);
+    return () => clearInterval(interval);
+  }, [role, token]);
+
+  useEffect(() => {
     if (!token) return undefined;
     const unsubscribe = subscribe((msg) => {
       if (msg.type === "reading" && msg.payload) {
@@ -101,6 +122,7 @@ export default function App() {
           ].slice(0, 50),
         );
       }
+      if (msg.type === "alert") setAlertCount((count) => count + 1);
       if (msg.type === "alert")
         setLog((prev) =>
           [
@@ -327,41 +349,46 @@ export default function App() {
     setActive(id);
     setMobileMenu(false);
   };
-  return;
-  <div className="flex min-h-screen bg-[#f6f8fb]">
-    <Sidebar
-      active={active}
-      onNavigate={navigate}
-      role={role}
-      onLogout={logout}
-    />
-    {mobileMenu && (
-      <div
-        className="fixed inset-0 z-40 bg-slate-950/40 lg:hidden"
-        onClick={() => setMobileMenu(false)}
-      >
-        <div
-          className="h-full w-72 bg-[#06284b] text-white"
-          onClick={(e) => e.stopPropagation()}
-        >
-          <Sidebar
-            active={active}
-            onNavigate={navigate}
-            role={role}
-            onLogout={logout}
-            mobile
-          />
-        </div>
-      </div>
-    )}
-    <div className="min-w-0 flex-1">
-      <Header
-        title={titles[active]}
+  return (
+    <div className="flex min-h-screen bg-[#f6f8fb]">
+      <Sidebar
+        active={active}
+        onNavigate={navigate}
         role={role}
-        onMenu={() => setMobileMenu(true)}
         onLogout={logout}
+        alertCount={alertCount}
+        className="hidden lg:flex"
       />
-      <main className="mx-auto max-w-[1600px] p-4 sm:p-6">{content}</main>
+      {mobileMenu && (
+        <div
+          className="fixed inset-0 z-40 bg-slate-950/40 lg:hidden"
+          onClick={() => setMobileMenu(false)}
+        >
+          <div
+            className="h-full w-72 bg-[#06284b] text-white"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <Sidebar
+              active={active}
+              onNavigate={navigate}
+              role={role}
+              onLogout={logout}
+              alertCount={alertCount}
+              mobile
+            />
+          </div>
+        </div>
+      )}
+      <div className="min-w-0 flex-1">
+        <Header
+          title={titles[active]}
+          role={role}
+          onMenu={() => setMobileMenu(true)}
+          onLogout={logout}
+          alertCount={alertCount}
+        />
+        <main className="mx-auto max-w-[1600px] p-4 sm:p-6">{content}</main>
+      </div>
     </div>
-  </div>;
+  );
 }

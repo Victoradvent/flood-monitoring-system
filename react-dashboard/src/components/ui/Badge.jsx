@@ -10,7 +10,9 @@ export default function Badge({ children, value }) {
   const label = value ?? children ?? "NORMAL";
   return;
   <span
-    className={`inline-flex items-center rounded-md px-2 py-1 text-[11px] font-semibold uppercase tracking-wide ${styles[label] || "bg-slate-100 text-slate-600 ring-1 ring-slate-200"}`}
+    className={`inline-flex items-center rounded-md px-2 py-1 text-[11px] 
+      font-semibold uppercase tracking-wide ${styles[label] || 
+        "bg-slate-100 text-slate-600 ring-1 ring-slate-200"}`}
   >
     {label}
   </span>;

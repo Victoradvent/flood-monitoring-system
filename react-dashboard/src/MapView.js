@@ -1,5 +1,11 @@
-import React, { useMemo } from "react";
-import { MapContainer, TileLayer, Popup, CircleMarker } from "react-leaflet";
+import React, { useEffect, useMemo } from "react";
+import {
+  MapContainer,
+  TileLayer,
+  Popup,
+  CircleMarker,
+  useMap,
+} from "react-leaflet";
 import MarkerClusterGroup from "react-leaflet-markercluster";
 import "leaflet/dist/leaflet.css";
 import "leaflet.markercluster/dist/MarkerCluster.css";
@@ -11,6 +17,27 @@ function statusColor(status) {
   return "#16a34a";
 }
 const DEFAULT_COORD = [6.21, 7.07];
+
+function MapBounds({ nodes }) {
+  const map = useMap();
+
+  useEffect(() => {
+    const coordinates = Object.values(nodes)
+      .filter((node) => Number.isFinite(Number(node.lat)) && Number.isFinite(Number(node.lng)))
+      .map((node) => [Number(node.lat), Number(node.lng)]);
+
+    if (coordinates.length === 0) return;
+    if (coordinates.length === 1) {
+      map.setView(coordinates[0], 13);
+      return;
+    }
+
+    map.fitBounds(coordinates, { padding: [30, 30], maxZoom: 13 });
+  }, [map, nodes]);
+
+  return null;
+}
+
 export default function MapView({ nodes = {} }) {
   const center = useMemo(() => {
     const arr = Object.values(nodes);
@@ -33,6 +60,7 @@ export default function MapView({ nodes = {} }) {
         attribution="&copy; OpenStreetMap contributors"
         url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
       />
+      <MapBounds nodes={nodes} />
       <MarkerClusterGroup>
         {Object.entries(nodes).map(([id, node]) => {
           const color = statusColor(node.status);
