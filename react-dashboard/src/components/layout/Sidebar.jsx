@@ -9,7 +9,7 @@ export default function Sidebar({
   alertCount = 0,
   className = "",
 }) {
-  const items = [
+  const baseItems = [
     ["dashboard", "Dashboard", "home"],
     ["map", "Map", "map"],
     ["alerts", "Alerts", "bell"],
@@ -19,6 +19,11 @@ export default function Sidebar({
     ["audit", "Audit Logs", "clipboard"],
     ["profile", "Profile", "user"],
   ];
+  const items = role === "resident"
+    ? [["dashboard", "Dashboard", "home"], ["profile", "Profile", "user"]]
+    : role === "operator"
+      ? baseItems.filter(([id]) => id !== "nodes")
+      : baseItems;
 
   return (
     <aside
@@ -86,7 +91,7 @@ export default function Sidebar({
             >
               <Icon name="shield" size={17} />
 
-              <span>Administration</span>
+              <span>Control Center</span>
             </button>
           </>
         )}

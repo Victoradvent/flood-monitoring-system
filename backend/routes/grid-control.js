@@ -28,7 +28,7 @@ router.get(
 router.post(
   "/:id/cutoff",
   authMiddleware,
-  requireRole("operator"),
+  requireAnyRole(["admin", "operator"]),
   async (req, res) => {
     const id = req.params.id;
     try {

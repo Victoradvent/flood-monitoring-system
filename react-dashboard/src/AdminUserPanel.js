@@ -14,6 +14,8 @@ export default function AdminUserPanel({ token }) {
       username: "",
       password: "",
       role: "operator",
+      phone: "",
+      node_id: "",
     }),
     [message, setMessage] = useState("");
   const currentUsername = decodeUsername(token);
@@ -48,7 +50,7 @@ export default function AdminUserPanel({ token }) {
       const d = await r.json();
       if (!r.ok) throw new Error(d.error || "Failed to create account");
       setMessage(`Created ${d.role} account "${d.username}"`);
-      setForm({ username: "", password: "", role: "operator" });
+      setForm({ username: "", password: "", role: "operator", phone: "", node_id: "" });
       loadUsers();
     } catch (e) {
       setMessage(e.message);
@@ -75,6 +77,16 @@ export default function AdminUserPanel({ token }) {
     } catch (e) {
       setMessage(e.message);
     }
+  };
+  const updateUser = async (user, changes) => {
+    if (!window.confirm("Confirm this account change?")) return;
+    try {
+      const r = await fetch(`/users/${user.id}`, { method: "PATCH", headers: authHeaders, body: JSON.stringify(changes) });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || "Failed to update account");
+      setMessage("Account change recorded");
+      loadUsers();
+    } catch (e) { setMessage(e.message); }
   };
   return (
     <Card
@@ -109,6 +121,10 @@ export default function AdminUserPanel({ token }) {
             <option value="admin">Admin</option>
             <option value="resident">Resident</option>
           </select>
+          {form.role === "resident" && <>
+            <input className="input-field" placeholder="Resident phone (must equal username)" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} required />
+            <input className="input-field" placeholder="Subscribed node ID" value={form.node_id} onChange={(e) => setForm({ ...form, node_id: e.target.value })} required />
+          </>}
           <button className="primary-btn w-full" type="submit">
             <Icon name="plus" size={16} />
             Create Account
@@ -133,17 +149,9 @@ export default function AdminUserPanel({ token }) {
                 {users.map((u) => (
                   <tr key={u.id}>
                     <td className="px-3 py-3 font-semibold">{u.username}</td>
-                    <td className="capitalize text-slate-500">{u.role}</td>
+                    <td className="capitalize text-slate-500"><select className="input-field py-1 text-xs" value={u.role} disabled={u.username === currentUsername} onChange={(e) => updateUser(u, { role: e.target.value })}><option>admin</option><option>operator</option><option>resident</option></select></td>
                     <td className="text-right">
-                      {u.username !== currentUsername && (
-                        <button
-                          onClick={() => deleteUser(u.id)}
-                          className="inline-flex items-center gap-1 rounded-md border border-red-200 px-2.5 py-1.5 text-xs font-semibold text-red-600 hover:bg-red-50"
-                        >
-                          <Icon name="trash" size={13} />
-                          Remove
-                        </button>
-                      )}
+                      {u.username !== currentUsername && <div className="flex justify-end gap-2"><button onClick={() => updateUser(u, { active: !u.active })} className="secondary-btn text-xs">{u.active === false ? "Activate" : "Deactivate"}</button><button onClick={() => deleteUser(u.id)} className="inline-flex items-center gap-1 rounded-md border border-red-200 px-2.5 py-1.5 text-xs font-semibold text-red-600 hover:bg-red-50"><Icon name="trash" size={13} />Remove</button></div>}
                     </td>
                   </tr>
                 ))}

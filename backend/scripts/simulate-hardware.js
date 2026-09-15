@@ -99,6 +99,22 @@ const client = mqtt.connect(`${tlsEnabled ? "mqtts" : "mqtt"}://${broker}:${port
 let sequence = 0;
 const pendingPayloads = [];
 
+function finishSimulation() {
+  let attempts = 0;
+  const drain = () => {
+    attempts += 1;
+    if (!gsm.connected) gsm.connect();
+    while (pendingPayloads.length > 0 && gsm.connected) publishPayload(pendingPayloads.shift());
+    if (pendingPayloads.length === 0 || attempts >= 20) {
+      if (pendingPayloads.length > 0) console.error(`[SIMULATED_ESP32] shutdown with ${pendingPayloads.length} buffered payloads`);
+      setTimeout(() => client.end(), 500);
+      return;
+    }
+    setTimeout(drain, 250);
+  };
+  drain();
+}
+
 function publishPayload(payload) {
   client.publish(topic, JSON.stringify(payload), { qos: 1 }, (error) => {
     if (error) console.error(`[SIMULATED_ESP32] publish failed sequence=${payload.sequence}`, error.message);
@@ -130,7 +146,7 @@ client.on("connect", () => {
     });
     if (maxReadings > 0 && sequence >= maxReadings) {
       clearInterval(timer);
-      setTimeout(() => client.end(), 250);
+      finishSimulation();
     }
   }, intervalMs);
 });

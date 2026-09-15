@@ -18,6 +18,7 @@ function logEvent(alertId, type, token) {
 }
 export default function OperatorPanel({ token: propToken }) {
   const [alerts, setAlerts] = useState([]);
+  const [thresholds, setThresholds] = useState(null);
   const token = propToken || localStorage.getItem("jwt");
   useEffect(() => {
     if (!token) return;
@@ -30,8 +31,12 @@ export default function OperatorPanel({ token: propToken }) {
       })
       .then(setAlerts)
       .catch((e) => console.error("Fetch alerts error", e));
+    fetch("/settings/thresholds", { headers: { Authorization: `Bearer ${token}` } })
+      .then((r) => r.json())
+      .then((d) => setThresholds(d.setting_value))
+      .catch((e) => console.error("Fetch threshold error", e));
     const protocol = location.protocol === "https:" ? "wss:" : "ws:";
-    const ws = new WebSocket(`${protocol}//${location.host}/ws`);
+    const ws = new WebSocket(`${protocol}//${location.host}/ws?token=${encodeURIComponent(token)}`);
     ws.onmessage = (evt) => {
       try {
         const msg = JSON.parse(evt.data);
@@ -67,8 +72,21 @@ export default function OperatorPanel({ token: propToken }) {
         setAlerts((p) => p.map((a) => (a.id === updated.id ? updated : a))),
       )
       .catch((e) => console.error("Ack error", e));
+  const resolve = (id, state) => {
+    const reason = window.prompt(`Reason to ${state.toLowerCase()} this alert:`);
+    if (!reason || !reason.trim()) return;
+    fetch(`/alerts/${id}/${state === "RESOLVED" ? "resolve" : "suppress"}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ reason: reason.trim() }),
+    }).then(async (r) => {
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || "Alert update failed");
+      setAlerts((p) => p.map((a) => (a.id === d.id ? d : a)));
+    }).catch((e) => console.error("Alert state error", e));
+  };
   return (
-    <Card
+    <div className="space-y-5"><Card title="Active thresholds" subtitle="Read-only safety configuration"><div className="flex gap-6 text-sm"><span>Warning: <b>{thresholds?.warning_cm ?? "—"} cm</b></span><span>Critical: <b>{thresholds?.critical_cm ?? "—"} cm</b></span></div></Card><Card
       title="Alerts"
       subtitle="Live flood alerts requiring operator attention"
       action={
@@ -115,12 +133,16 @@ export default function OperatorPanel({ token: propToken }) {
                 </td>
                 <td className="text-right">
                   {!a.acknowledged && a.id ? (
-                    <button
-                      className="secondary-btn px-3 py-1.5 text-xs"
-                      onClick={() => acknowledge(a.id)}
-                    >
-                      Acknowledge
-                    </button>
+                    <div className="flex justify-end gap-2">
+                      <button
+                        className="secondary-btn px-3 py-1.5 text-xs"
+                        onClick={() => acknowledge(a.id)}
+                      >
+                        Acknowledge
+                      </button>
+                      <button onClick={() => resolve(a.id, "RESOLVED")} className="secondary-btn px-3 py-1.5 text-xs">Resolve</button>
+                      <button onClick={() => resolve(a.id, "SUPPRESSED")} className="secondary-btn px-3 py-1.5 text-xs">Suppress</button>
+                    </div>
                   ) : (
                     <span className="text-xs text-slate-400">—</span>
                   )}
@@ -135,6 +157,6 @@ export default function OperatorPanel({ token: propToken }) {
           No active alerts.
         </div>
       )}
-    </Card>
+    </Card></div>
   );
 }
