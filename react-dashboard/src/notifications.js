@@ -14,6 +14,6 @@ export function showNotification(title, body) {
 }
 
 export function playAlertSound() {
-  const audio = new Audio('/alert-tone.mp3');
-  audio.play().catch(err => console.error('Audio play error', err));
+  const audio = new Audio("/alert-tone.mp3");
+  audio.play().catch((err) => console.error("Audio play error", err));
 }

@@ -1,83 +1,162 @@
-import React, { useEffect, useState } from 'react';
-import { showNotification, requestPermission, playAlertSound } from './notifications';
-
+import React, { useEffect, useState } from "react";
+import {
+  showNotification,
+  requestPermission,
+  playAlertSound,
+} from "./notifications";
+import Card from "./components/ui/Card";
+import Badge from "./components/ui/Badge";
 function logEvent(alertId, type, token) {
-  fetch('/alert-events', {
-    method: 'POST',
+  fetch("/alert-events", {
+    method: "POST",
     headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${token}`
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
     },
-    body: JSON.stringify({ alert_id: alertId, event_type: type })
-  }).catch(err => console.error('Log event error', err));
+    body: JSON.stringify({ alert_id: alertId, event_type: type }),
+  }).catch((e) => console.error("Log event error", e));
 }
-
-export default function OperatorPanel() {
+export default function OperatorPanel({ token: propToken }) {
   const [alerts, setAlerts] = useState([]);
-  const token = localStorage.getItem('jwt');
-
+  const [thresholds, setThresholds] = useState(null);
+  const token = propToken || localStorage.getItem("jwt");
   useEffect(() => {
+    if (!token) return;
     requestPermission();
-
-    fetch('/alerts', { headers: { Authorization: `Bearer ${token}` } })
-      .then(res => res.json())
+    fetch("/alerts", { headers: { Authorization: `Bearer ${token}` } })
+      .then(async (r) => {
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.error || "Failed to load alerts");
+        return d;
+      })
       .then(setAlerts)
-      .catch(err => console.error('Fetch alerts error', err));
-
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const ws = new WebSocket(`${protocol}//${window.location.host}/ws`);
+      .catch((e) => console.error("Fetch alerts error", e));
+    fetch("/settings/thresholds", { headers: { Authorization: `Bearer ${token}` } })
+      .then((r) => r.json())
+      .then((d) => setThresholds(d.setting_value))
+      .catch((e) => console.error("Fetch threshold error", e));
+    const protocol = location.protocol === "https:" ? "wss:" : "ws:";
+    const ws = new WebSocket(`${protocol}//${location.host}/ws?token=${encodeURIComponent(token)}`);
     ws.onmessage = (evt) => {
       try {
         const msg = JSON.parse(evt.data);
-        if (msg.type === 'alert') {
-          setAlerts(prev => [msg, ...prev]);
-
-          if (msg.level === 'CRITICAL') {
+        if (msg.type === "alert") {
+          setAlerts((p) => [msg, ...p]);
+          if (msg.level === "CRITICAL") {
             showNotification(
               `CRITICAL Alert - ${msg.node}`,
-              `Water level ${msg.levelValue} cm at ${msg.timestamp}`
+              `Water level ${msg.levelValue} cm at ${msg.timestamp}`,
             );
             playAlertSound();
-
-            logEvent(msg.id, 'notification', token);
-            logEvent(msg.id, 'sound', token);
+            logEvent(msg.id, "notification", token);
+            logEvent(msg.id, "sound", token);
           }
         }
-      } catch (err) {
-        console.error('WS parse error', err);
+      } catch (e) {
+        console.error("WS parse error", e);
       }
     };
-
     return () => ws.close();
   }, [token]);
-
-  const acknowledge = (id) => {
+  const acknowledge = (id) =>
     fetch(`/alerts/${id}/ack`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${token}` }
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` },
     })
-      .then(res => res.json())
-      .then(updated => {
-        setAlerts(prev => prev.map(a => a.id === updated.id ? updated : a));
+      .then(async (r) => {
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.error || "Acknowledgement failed");
+        return d;
       })
-      .catch(err => console.error('Ack error', err));
+      .then((updated) =>
+        setAlerts((p) => p.map((a) => (a.id === updated.id ? updated : a))),
+      )
+      .catch((e) => console.error("Ack error", e));
+  const resolve = (id, state) => {
+    const reason = window.prompt(`Reason to ${state.toLowerCase()} this alert:`);
+    if (!reason || !reason.trim()) return;
+    fetch(`/alerts/${id}/${state === "RESOLVED" ? "resolve" : "suppress"}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ reason: reason.trim() }),
+    }).then(async (r) => {
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || "Alert update failed");
+      setAlerts((p) => p.map((a) => (a.id === d.id ? d : a)));
+    }).catch((e) => console.error("Alert state error", e));
   };
-
   return (
-    <div>
-      <h3>Operator Alerts</h3>
-      <ul>
-        {alerts.map((a, i) => (
-          <li key={a.id || i}>
-            {a.node || a.node_id} — {a.level || a.alert_level} — {a.timestamp || a.triggered_at}
-            {a.acknowledged ? (
-              <span> ✅ acknowledged by {a.acknowledged_by}</span>
-            ) : (
-              <button onClick={() => acknowledge(a.id)}>Acknowledge</button>
-            )}
-          </li>
-        ))}
-      </ul>
-    </div>
+    <div className="space-y-5"><Card title="Active thresholds" subtitle="Read-only safety configuration"><div className="flex gap-6 text-sm"><span>Warning: <b>{thresholds?.warning_cm ?? "—"} cm</b></span><span>Critical: <b>{thresholds?.critical_cm ?? "—"} cm</b></span></div></Card><Card
+      title="Alerts"
+      subtitle="Live flood alerts requiring operator attention"
+      action={
+        <span className="rounded-full bg-red-50 px-2.5 py-1 text-xs font-semibold text-red-600">
+          {alerts.length} alerts
+        </span>
+      }
+    >
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[700px] text-left text-sm">
+          <thead className="border-b border-slate-100 text-[10px] uppercase tracking-wider text-slate-400">
+            <tr>
+              <th className="px-3 py-3">Alert ID</th>
+              <th>Node</th>
+              <th>Level</th>
+              <th>Water Level</th>
+              <th>Time</th>
+              <th>Status</th>
+              <th className="text-right">Action</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-100">
+            {alerts.map((a, i) => (
+              <tr key={a.id || i} className="hover:bg-slate-50">
+                <td className="px-3 py-3 font-semibold">{a.id || "—"}</td>
+                <td>{a.node || a.node_id || "—"}</td>
+                <td>
+                  <Badge value={a.level || a.alert_level || "WARNING"} />
+                </td>
+                <td>{a.levelValue ?? a.water_level_cm ?? "—"} cm</td>
+                <td className="text-xs text-slate-500">
+                  {a.timestamp || a.triggered_at || "—"}
+                </td>
+                <td>
+                  {a.acknowledged ? (
+                    <span className="text-xs font-semibold text-emerald-600">
+                      Acknowledged
+                    </span>
+                  ) : (
+                    <span className="text-xs font-semibold text-red-600">
+                      New
+                    </span>
+                  )}
+                </td>
+                <td className="text-right">
+                  {!a.acknowledged && a.id ? (
+                    <div className="flex justify-end gap-2">
+                      <button
+                        className="secondary-btn px-3 py-1.5 text-xs"
+                        onClick={() => acknowledge(a.id)}
+                      >
+                        Acknowledge
+                      </button>
+                      <button onClick={() => resolve(a.id, "RESOLVED")} className="secondary-btn px-3 py-1.5 text-xs">Resolve</button>
+                      <button onClick={() => resolve(a.id, "SUPPRESSED")} className="secondary-btn px-3 py-1.5 text-xs">Suppress</button>
+                    </div>
+                  ) : (
+                    <span className="text-xs text-slate-400">—</span>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {alerts.length === 0 && (
+        <div className="py-12 text-center text-sm text-slate-400">
+          No active alerts.
+        </div>
+      )}
+    </Card></div>
   );
 }

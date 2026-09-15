@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState } from "react";
 import {
   LineChart,
   Line,
@@ -8,191 +8,170 @@ import {
   CartesianGrid,
   ResponsiveContainer,
   BarChart,
-  Bar
-} from 'recharts';
-
+  Bar,
+} from "recharts";
+import Card from "./components/ui/Card";
+import Icon from "./components/ui/Icon";
 export default function ReportsPanel({ token }) {
-  const [alertsPerDay, setAlertsPerDay] = useState([]);
-  const [eventsPerDay, setEventsPerDay] = useState([]);
-  const [responseTime, setResponseTime] = useState([]);
-
-  const authFetch = async endpoint => {
-    const response = await fetch(endpoint, {
-      headers: {
-        Authorization: `Bearer ${token}`
-      }
+  const [a, setA] = useState([]),
+    [e, setE] = useState([]),
+    [r, setR] = useState([]),
+    [loading, setLoading] = useState(false);
+  const authFetch = async (endpoint) => {
+    const res = await fetch(endpoint, {
+      headers: { Authorization: `Bearer ${token}` },
     });
-
-    const data = await response.json();
-
-    if (!response.ok) {
-      throw new Error(
-        data.error || 'Request failed'
-      );
-    }
-
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "Request failed");
     return data;
   };
-
   useEffect(() => {
     if (!token) return;
-
+    setLoading(true);
     Promise.all([
-      authFetch('/reports/alerts-per-day'),
-      authFetch('/reports/events-per-day'),
-      authFetch('/reports/response-time')
+      authFetch("/reports/alerts-per-day"),
+      authFetch("/reports/events-per-day"),
+      authFetch("/reports/response-time"),
     ])
-      .then(([alerts, events, response]) => {
-        setAlertsPerDay(alerts);
-        setEventsPerDay(events);
-        setResponseTime(response);
+      .then(([x, y, z]) => {
+        setA(x);
+        setE(y);
+        setR(z);
       })
-      .catch(err => {
-        console.error(
-          'Report loading error:',
-          err
-        );
-      });
+      .catch((err) => console.error("Report loading error:", err))
+      .finally(() => setLoading(false));
   }, [token]);
-
-  const downloadCSV = async (
-    endpoint,
-    filename
-  ) => {
+  const downloadCSV = async (endpoint, filename) => {
     try {
-      const response = await fetch(endpoint, {
-        headers: {
-          Authorization: `Bearer ${token}`
-        }
+      const res = await fetch(endpoint, {
+        headers: { Authorization: `Bearer ${token}` },
       });
-
-      if (!response.ok) {
-        throw new Error(
-          'Failed to download report'
-        );
-      }
-
-      const blob = await response.blob();
-      const url = URL.createObjectURL(blob);
-
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-
-      URL.revokeObjectURL(url);
+      if (!res.ok) throw new Error("Failed to download report");
+      const b = await res.blob();
+      const u = URL.createObjectURL(b);
+      const link = document.createElement("a");
+      link.href = u;
+      link.download = filename;
+      link.click();
+      URL.revokeObjectURL(u);
     } catch (err) {
-      console.error(
-        'CSV download error:',
-        err
-      );
+      console.error(err);
+      alert(err.message);
     }
   };
-
-  return (
-    <div>
-      <h2>Reporting Dashboard</h2>
-
-      <div
-        style={{
-          display: 'flex',
-          gap: 8,
-          marginBottom: 16
-        }}
-      >
-        <button
-          onClick={() =>
-            downloadCSV(
-              '/reports/alerts-per-day.csv',
-              'alerts-per-day.csv'
-            )
-          }
-        >
-          Download Alerts CSV
-        </button>
-
-        <button
-          onClick={() =>
-            downloadCSV(
-              '/reports/events-per-day.csv',
-              'events-per-day.csv'
-            )
-          }
-        >
-          Download Events CSV
-        </button>
-
-        <button
-          onClick={() =>
-            downloadCSV(
-              '/reports/response-time.csv',
-              'response-time.csv'
-            )
-          }
-        >
-          Download Response Time CSV
-        </button>
+  const chart = (title, data, content) => (
+    <Card title={title} className="min-h-[340px]">
+      <div className="h-64">
+        {loading ? (
+          <div className="flex h-full items-center justify-center text-sm text-slate-400">
+            Loading report…
+          </div>
+        ) : (
+          <ResponsiveContainer width="100%" height="100%">
+            {content(data)}
+          </ResponsiveContainer>
+        )}
       </div>
-
-      <h3>Alerts per Day</h3>
-
-      <ResponsiveContainer width="100%" height={250}>
-        <BarChart data={alertsPerDay}>
-          <CartesianGrid strokeDasharray="3 3" />
-          <XAxis dataKey="day" />
-          <YAxis />
-          <Tooltip />
-          <Bar
-            dataKey="critical_count"
-            name="Critical"
-          />
-          <Bar
-            dataKey="warning_count"
-            name="Warning"
-          />
-        </BarChart>
-      </ResponsiveContainer>
-
-      <h3>
-        Notifications &amp; Sounds per Day
-      </h3>
-
-      <ResponsiveContainer width="100%" height={250}>
-        <BarChart data={eventsPerDay}>
-          <CartesianGrid strokeDasharray="3 3" />
-          <XAxis dataKey="day" />
-          <YAxis />
-          <Tooltip />
-          <Bar
-            dataKey="notifications"
-            name="Notifications"
-          />
-          <Bar
-            dataKey="sounds"
-            name="Sounds"
-          />
-        </BarChart>
-      </ResponsiveContainer>
-
-      <h3>
-        Average Response Time (seconds)
-      </h3>
-
-      <ResponsiveContainer width="100%" height={250}>
-        <LineChart data={responseTime}>
-          <CartesianGrid strokeDasharray="3 3" />
-          <XAxis dataKey="day" />
-          <YAxis unit="s" />
-          <Tooltip />
-          <Line
-            type="monotone"
-            dataKey="avg_response_seconds"
-            dot={false}
-          />
-        </LineChart>
-      </ResponsiveContainer>
+    </Card>
+  );
+  return (
+    <div className="space-y-5">
+      <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
+        <div>
+          <h2 className="text-lg font-bold text-slate-900">
+            Reports & Analytics
+          </h2>
+          <p className="text-sm text-slate-500">
+            Operational trends and response performance
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <button
+            className="secondary-btn text-xs"
+            onClick={() =>
+              downloadCSV("/reports/alerts-per-day.csv", "alerts-per-day.csv")
+            }
+          >
+            <Icon name="download" size={14} />
+            Alerts CSV
+          </button>
+          <button
+            className="secondary-btn text-xs"
+            onClick={() =>
+              downloadCSV("/reports/events-per-day.csv", "events-per-day.csv")
+            }
+          >
+            <Icon name="download" size={14} />
+            Events CSV
+          </button>
+          <button
+            className="secondary-btn text-xs"
+            onClick={() =>
+              downloadCSV("/reports/response-time.csv", "response-time.csv")
+            }
+          >
+            <Icon name="download" size={14} />
+            Response CSV
+          </button>
+        </div>
+      </div>
+      <div className="grid gap-5 xl:grid-cols-2">
+        {chart("Critical & Warning Alerts per Day", a, (d) => (
+          <BarChart data={d}>
+            <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+            <XAxis dataKey="day" tick={{ fontSize: 11 }} />
+            <YAxis tick={{ fontSize: 11 }} />
+            <Tooltip />
+            <Bar
+              dataKey="critical_count"
+              name="Critical"
+              fill="#ef4444"
+              radius={[3, 3, 0, 0]}
+            />
+            <Bar
+              dataKey="warning_count"
+              name="Warning"
+              fill="#f59e0b"
+              radius={[3, 3, 0, 0]}
+            />
+          </BarChart>
+        ))}
+        {chart("Notifications & Sounds per Day", e, (d) => (
+          <BarChart data={d}>
+            <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+            <XAxis dataKey="day" tick={{ fontSize: 11 }} />
+            <YAxis tick={{ fontSize: 11 }} />
+            <Tooltip />
+            <Bar
+              dataKey="notifications"
+              name="Notifications"
+              fill="#2563eb"
+              radius={[3, 3, 0, 0]}
+            />
+            <Bar
+              dataKey="sounds"
+              name="Sounds"
+              fill="#60a5fa"
+              radius={[3, 3, 0, 0]}
+            />
+          </BarChart>
+        ))}
+        {chart("Average Response Time (seconds)", r, (d) => (
+          <LineChart data={d}>
+            <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+            <XAxis dataKey="day" tick={{ fontSize: 11 }} />
+            <YAxis unit="s" tick={{ fontSize: 11 }} />
+            <Tooltip />
+            <Line
+              type="monotone"
+              dataKey="avg_response_seconds"
+              stroke="#2563eb"
+              strokeWidth={3}
+              dot={false}
+            />
+          </LineChart>
+        ))}
+      </div>
     </div>
   );
 }

@@ -16,5 +16,8 @@
     "pg": "^8.4.0",
     "twilio": "^6.0.2",
     "ws": "^8.1.0"
+  },
+  "allowScripts": {
+    "bcrypt@6.0.0": true
   }
 }

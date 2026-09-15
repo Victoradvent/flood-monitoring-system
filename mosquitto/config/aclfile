@@ -1,0 +1,3 @@
+user mqtt_user
+topic write nodes/flood
+topic read nodes/flood
