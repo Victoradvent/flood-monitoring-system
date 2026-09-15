@@ -11,6 +11,7 @@ import AuditTrends from "./AuditTrends";
 import Login from "./Login";
 import AdminPanel from "./AdminPanel";
 import AdminUserPanel from "./AdminUserPanel";
+import AdminControlCenter from "./AdminControlCenter";
 import ResidentDashboard from "./ResidentDashboard";
 import Sidebar from "./components/layout/Sidebar";
 import Header from "./components/layout/Header";
@@ -126,8 +127,16 @@ function ReadOnly({ label, value }) { return <div><dt className="text-xs upperca
 function Preferences({ value, onChange }) { return <fieldset><legend className="text-sm font-medium text-slate-700">Notification preferences</legend><div className="mt-2 space-y-2 text-sm text-slate-600"><label className="flex gap-2"><input type="checkbox" checked={value.sms !== false} onChange={(e) => onChange({ ...value, sms: e.target.checked })} /> SMS alerts</label><label className="flex gap-2"><input type="checkbox" checked={value.browser !== false} onChange={(e) => onChange({ ...value, browser: e.target.checked })} /> Browser alerts</label></div></fieldset>; }
 
 export default function App() {
-  if (window.location.pathname.startsWith("/resident"))
-    return <ResidentDashboard />;
+  if (window.location.pathname.startsWith("/resident")) {
+    const residentToken = localStorage.getItem("jwt");
+    if (!residentToken || localStorage.getItem("role") !== "resident") return <Login onLogin={(nextToken, nextRole) => {
+      if (nextRole !== "resident") return;
+      localStorage.setItem("jwt", nextToken);
+      localStorage.setItem("role", nextRole);
+      window.location.reload();
+    }} />;
+    return <ResidentDashboard token={residentToken} />;
+  }
 
   const [nodes, setNodes] = useState({});
   const [equipment, setEquipment] = useState([]);
@@ -462,17 +471,7 @@ export default function App() {
         </div>
       ),
       admin: (
-        <div className="space-y-5">
-          <AdminPanel token={token} />
-          <AdminUserPanel token={token} />
-          <Card title="Node Location Management">
-            <div className="h-[500px] overflow-hidden rounded-lg">
-              <AdminMap />
-            </div>
-          </Card>
-          <ReportsPanel token={token} />
-          <AuditTrends token={token} role={role} />
-        </div>
+        role === "admin" ? <div className="space-y-5"><AdminControlCenter token={token} /><AdminUserPanel token={token} /></div> : dashboard
       ),
       profile: <Profile token={token} role={role} />,
     }[active] || dashboard;

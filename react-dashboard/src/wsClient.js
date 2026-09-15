@@ -1,14 +1,14 @@
 // Lightweight WebSocket client wrapper
 // Adjust WS_URL to match backend WebSocket endpoint (ws://localhost:3000 by default)
 const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-export const WS_URL =
-  process.env.REACT_APP_WS_URL || `${protocol}//${window.location.host}/ws`;
+const baseWsUrl = process.env.REACT_APP_WS_URL || `${protocol}//${window.location.host}/ws`;
+export const getWsUrl = () => `${baseWsUrl}${baseWsUrl.includes("?") ? "&" : "?"}token=${encodeURIComponent(localStorage.getItem("jwt") || "")}`;
 let socket = null;
 const listeners = new Set();
 
 export function connect() {
   if (socket && socket.readyState === WebSocket.OPEN) return socket;
-  socket = new WebSocket(WS_URL);
+  socket = new WebSocket(getWsUrl());
 
   socket.onopen = () => console.log("WebSocket connected");
   socket.onclose = () => {

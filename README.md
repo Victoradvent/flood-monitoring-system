@@ -110,6 +110,44 @@ flood-monitoring-system/
 
 ## API Endpoints
 
+## Security Remediation
+
+- Roles are constrained to `admin`, `operator`, and `resident`; legacy `viewer` rows are migrated to `resident` by `db/init/017_enforce_roles.sql`.
+- WebSocket upgrades require a JWT and are server-scoped: administrators receive all events, operators receive their assigned node scope, and residents receive subscribed-node events only.
+- `GET /nodes` and `GET /resident/status` require authenticated roles. Resident status is derived from the authenticated resident username, which must match its subscriber phone.
+- Profile updates reject fields outside the caller's role allowlist. Alert event logging is restricted to administrators/operators, validates alert existence, and accepts only notification/sound events.
+- Cutoff recommendation is available to Administrators and Operators. No role can physically switch power because the existing grid operation is recommendation-only.
+- Thresholds are Administrator-editable and Operator-readable. Alert resolution/suppression and high-risk administrator changes require a reason and are audited.
+- Account lifecycle changes, including role changes, password reset, and deactivation, are Administrator-only and audited.
+
+The simulator endpoint records an auditable request; it does not claim to execute the hardware simulator itself. Accuracy is reported as unavailable until a labelled ground-truth dataset exists. Foreign-key constraints for readings and alerts are marked `NOT VALID` to preserve existing historical rows while enforcing relationships for new writes.
+
+### Administrator Control Center
+
+All endpoints below require `Authorization: Bearer <JWT>` and `role=admin`; operators and residents receive `403 Forbidden`.
+
+- `GET /admin/control-center/overview` - Aggregated live health, nodes, readings, alerts, SMS deliveries, grid equipment, users, settings, and audit history
+- `PUT /admin/control-center/thresholds` - Persist and apply warning/critical water-level thresholds
+- `PATCH /admin/control-center/nodes/:id` - Enable or disable a sensor node
+- `POST /admin/control-center/deliveries/:id/retry` - Queue a failed SMS delivery for the retry worker
+- `POST /admin/control-center/subscribers` / `PATCH|DELETE /admin/control-center/subscribers/:id` - Manage notification recipients
+- `PATCH /admin/control-center/equipment/:id` - Override grid status and annotation
+- `POST /admin/control-center/simulations` - Record and broadcast a telemetry simulation request
+
+### Administrator Coverage Matrix
+
+| System function | Admin can view | Admin can control/action | Real-time |
+| --- | --- | --- | --- |
+| Sensor nodes | Latest/historical readings, health, battery, status, coordinates | Enable/disable node, manage node metadata through Nodes | Yes: WebSocket plus 15-second refresh |
+| Communication pipeline | MQTT configuration, SMS provider, per-recipient delivery/retry history | Queue failed SMS for resend; trigger simulation request | Yes: WebSocket plus refresh |
+| Data and logic | Raw readings, threshold settings, breach history | Change warning/critical thresholds; changes apply to MQTT evaluation | Readings live; settings on save |
+| Alerting | Alert history, acknowledgement state, recipient list | Add, activate/deactivate, remove recipients; resend failed delivery | Alerts and delivery refresh live |
+| Grid visualization | Full equipment map, status, coordinates, annotations | Override status and annotation | Equipment refresh; WebSocket recommendations |
+| System performance/health | API/database/MQTT/SMS health and activity audit | Trigger telemetry simulation; inspect audit trail | Health refreshed every 15 seconds |
+| Access and accountability | User accounts, roles, last login, all admin actions | Create/remove accounts and audit every control action | Audit refresh |
+
+Every administrator mutation writes `audit_logs` with actor, action, timestamp, and notes. Physical transformer switching is not feasible in this deployment because the system is recommendation-only; the admin center provides status override, annotation, and cutoff-recommendation visibility instead of pretending to control a power relay.
+
 ### Monitoring
 
 - `GET /health` - Health check

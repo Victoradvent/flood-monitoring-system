@@ -1,4 +1,5 @@
 const jwt = require("jsonwebtoken");
+const VALID_ROLES = new Set(["admin", "operator", "resident"]);
 
 function authenticateToken(req, res, next) {
   const authHeader = req.headers.authorization;
@@ -11,6 +12,9 @@ function authenticateToken(req, res, next) {
   jwt.verify(token, process.env.JWT_SECRET || "dev-secret", (err, user) => {
     if (err) {
       return res.status(403).json({ error: "Invalid token" });
+    }
+    if (!VALID_ROLES.has(user.role)) {
+      return res.status(403).json({ error: "Unrecognized role" });
     }
     req.user = user;
     next();
@@ -42,4 +46,5 @@ module.exports = {
   authMiddleware,
   requireRole,
   requireAnyRole,
+  VALID_ROLES,
 };

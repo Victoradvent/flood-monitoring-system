@@ -33,6 +33,7 @@ const gridInspection = require("./routes/grid-inspection");
 const subscribersRoutes = require("./routes/subscribers-admin");
 const residentRoutes = require("./routes/resident");
 const usersAdminRoutes = require("./routes/users-admin");
+const adminControlCenterRoutes = require("./routes/admin-control-center");
 
 // Config
 const {
@@ -65,6 +66,7 @@ const {
   MQTT_CA_FILE,
   PORT = 3000,
 } = process.env;
+const VALID_ROLES = new Set(["admin", "operator", "resident"]);
 
 const SECRET = process.env.JWT_SECRET;
 if (!SECRET) {
@@ -95,25 +97,105 @@ const smsProvider = createSmsProvider({
 // In-memory cooldown map: { "<node_id>::<level>": timestamp }
 const cooldownMap = new Map();
 const nodeStatusMap = new Map();
+const runtimeThresholds = {
+  warning_cm: Number(WARNING_LEVEL_CM),
+  critical_cm: Number(CRITICAL_LEVEL_CM),
+};
 
 // WebSocket server for dashboard
 const app = express();
 const server = require("http").createServer(app);
-const wss = new WebSocket.Server({ server });
+const wss = new WebSocket.Server({ noServer: true });
 app.set("wss", wss);
+app.locals.thresholds = runtimeThresholds;
+pool.query("SELECT setting_value FROM system_settings WHERE setting_key = 'thresholds'")
+  .then((result) => {
+    if (result.rows[0]?.setting_value) app.locals.thresholds = result.rows[0].setting_value;
+  })
+  .catch((err) => console.warn("Threshold settings will use environment defaults", err.message));
 app.use(cors());
 app.use(express.json());
 
-// Broadcast helper
+async function websocketContext(user) {
+  const account = await pool.query("SELECT role, username, assigned_zone, active FROM users WHERE id=$1", [user.user_id]);
+  if (!account.rowCount || account.rows[0].active === false || account.rows[0].role !== user.role) throw new Error("inactive or changed account");
+  const currentUser = { ...user, ...account.rows[0] };
+  if (currentUser.role === "admin") return { ...currentUser, nodeIds: null };
+  if (currentUser.role === "resident") {
+    const result = await pool.query(
+      "SELECT node_id FROM subscribers WHERE phone=$1 AND role='resident' AND active=TRUE",
+      [currentUser.username],
+    );
+    return { ...currentUser, nodeIds: new Set(result.rows.map((row) => row.node_id)) };
+  }
+  if (!currentUser.assigned_zone) return { ...currentUser, nodeIds: null };
+  const result = await pool.query(
+    "SELECT node_id FROM nodes WHERE name ILIKE $1 OR description ILIKE $1",
+    [`%${currentUser.assigned_zone}%`],
+  );
+  return { ...currentUser, nodeIds: new Set(result.rows.map((row) => row.node_id)) };
+}
+
+function websocketCanReceive(context, event) {
+  if (context.role === "admin") return true;
+  if (event.type === "reading") return context.nodeIds === null || context.nodeIds.has(event.payload?.node_id);
+  if (event.type === "alert") return context.nodeIds === null || context.nodeIds.has(event.node);
+  if (["grid_recommendation", "grid_hazard", "inspection_complete"].includes(event.type)) {
+    return context.role === "operator" && (context.nodeIds === null || context.nodeIds.has(event.node_id));
+  }
+  return false;
+}
+
+server.on("upgrade", async (request, socket, head) => {
+  try {
+    const requestUrl = new URL(request.url, "http://localhost");
+    if (requestUrl.pathname !== "/ws") throw new Error("unknown websocket path");
+    const token = requestUrl.searchParams.get("token");
+    if (!token) throw new Error("access token required");
+    const user = jwt.verify(token, SECRET);
+    if (!VALID_ROLES.has(user.role)) throw new Error("unrecognized role");
+    const context = await websocketContext(user);
+    wss.handleUpgrade(request, socket, head, (client) => {
+      client.context = context;
+      wss.emit("connection", client, request);
+    });
+  } catch (err) {
+    socket.write("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n");
+    socket.destroy();
+  }
+});
+
+// Broadcast helper. Authorization is evaluated per connection, never in the browser.
 function broadcast(obj) {
   const msg = JSON.stringify(obj);
   wss.clients.forEach((client) => {
-    if (client.readyState === WebSocket.OPEN) client.send(msg);
+    if (client.readyState === WebSocket.OPEN && websocketCanReceive(client.context, obj)) client.send(msg);
   });
 }
 
 // Simple health endpoint
 app.get("/health", (req, res) => res.json({ status: "NORMAL" }));
+
+// Metrics are observational only; no role can mutate operational measurements.
+app.get("/system/metrics", authMiddleware, requireAnyRole(["admin", "operator"]), async (req, res) => {
+  try {
+    const result = await pool.query(`SELECT
+      COUNT(*)::int AS readings,
+      COUNT(*) FILTER (WHERE status = 'SENSOR_ERROR')::int AS sensor_errors,
+      AVG(EXTRACT(EPOCH FROM (created_at - timestamp)) * 1000) AS avg_ingest_latency_ms
+      FROM readings WHERE created_at >= NOW() - INTERVAL '24 hours'`);
+    const row = result.rows[0];
+    const readings = Number(row.readings || 0);
+    res.json({
+      uptime_seconds: Math.round(process.uptime()),
+      readings_24h: readings,
+      sensor_error_rate: readings ? Number(row.sensor_errors || 0) / readings : 0,
+      avg_ingest_latency_ms: Number(row.avg_ingest_latency_ms || 0),
+      accuracy: null,
+      accuracy_note: "Accuracy requires a labelled ground-truth dataset and is not measurable from telemetry alone",
+    });
+  } catch (err) { res.status(500).json({ error: "internal" }); }
+});
 
 // Mount all routes
 app.use("/grid", gridControl);
@@ -127,6 +209,7 @@ app.use("/grid-inspection", gridInspection);
 app.use("/subscribers", subscribersRoutes);
 app.use("/resident", residentRoutes);
 app.use("/users", usersAdminRoutes);
+app.use("/admin/control-center", adminControlCenterRoutes);
 
 function profileFields(user, details = {}) {
   const role = user.role;
@@ -195,7 +278,15 @@ app.get("/profile", authMiddleware, async (req, res) => {
 });
 
 app.put("/profile", authMiddleware, async (req, res) => {
-  const allowed = ["display_name", "email", "assigned_zone", "shift_contact", "notification_preferences"];
+  const allowedByRole = {
+    admin: ["display_name", "email"],
+    operator: ["display_name", "email", "shift_contact"],
+    resident: ["display_name", "email", "notification_preferences"],
+  };
+  const allowed = allowedByRole[req.user.role] || [];
+  const supplied = Object.keys(req.body || {});
+  const unauthorized = supplied.filter((key) => !allowed.includes(key));
+  if (unauthorized.length > 0) return res.status(400).json({ error: `fields not editable for this role: ${unauthorized.join(", ")}` });
   const updates = Object.fromEntries(Object.entries(req.body || {}).filter(([key]) => allowed.includes(key)));
   if (Object.keys(updates).length === 0) return res.status(400).json({ error: "no editable profile fields supplied" });
   if (updates.notification_preferences !== undefined &&
@@ -218,6 +309,7 @@ app.put("/profile", authMiddleware, async (req, res) => {
       values,
     );
     if (result.rows.length === 0) return res.status(404).json({ error: "profile not found" });
+    if (req.user.role === "admin") await logAudit(null, req.user.user_id, "UPDATE_PROFILE", `fields=${Object.keys(updates).join(",")}`);
     res.json(profileFields(result.rows[0]));
   } catch (err) {
     console.error("Profile update error", err);
@@ -227,20 +319,21 @@ app.put("/profile", authMiddleware, async (req, res) => {
 
 app.post("/login", express.json(), async (req, res) => {
   const { username, password } = req.body;
-  const r = await pool.query("SELECT * FROM users WHERE username=$1", [
+  const r = await pool.query("SELECT * FROM users WHERE username=$1 AND active=TRUE", [
     username,
   ]);
   if (r.rows.length === 0)
     return res.status(401).json({ error: "invalid credentials" });
 
   const user = r.rows[0];
+  if (!VALID_ROLES.has(user.role)) return res.status(403).json({ error: "account has an unrecognized role" });
   const match = await bcrypt.compare(password, user.password_hash);
   if (!match) return res.status(401).json({ error: "invalid credentials" });
 
   await pool.query("UPDATE users SET last_login_at = NOW() WHERE id = $1", [user.id]);
 
   const token = jwt.sign(
-    { user_id: user.id, username: user.username, role: user.role },
+    { user_id: user.id, username: user.username, role: user.role, assigned_zone: user.assigned_zone || null },
     SECRET,
     { expiresIn: "2h" },
   );
@@ -267,15 +360,32 @@ app.get(
   },
 );
 
+app.get("/settings/thresholds", authMiddleware, requireAnyRole(["admin", "operator"]), async (req, res) => {
+  try {
+    const result = await pool.query("SELECT setting_value, updated_at FROM system_settings WHERE setting_key='thresholds'");
+    res.json(result.rows[0] || { setting_value: app.locals.thresholds, updated_at: null });
+  } catch (err) {
+    res.status(500).json({ error: "internal" });
+  }
+});
+
 // List nodes
 // Note: Node CRUD operations are now in routes/nodes.js
 
 app.post("/alert-events", authMiddleware, async (req, res) => {
   const { alert_id, event_type } = req.body;
-  if (!alert_id || !event_type)
+  const allowedEvents = new Set(["notification", "sound"]);
+  if (!alert_id || !event_type || !allowedEvents.has(event_type))
     return res.status(400).json({ error: "missing fields" });
+  if (!["admin", "operator"].includes(req.user.role)) return res.status(403).json({ error: "Forbidden" });
 
   try {
+    const alertResult = await pool.query("SELECT node_id FROM alerts WHERE id=$1", [alert_id]);
+    if (!alertResult.rowCount) return res.status(404).json({ error: "alert not found" });
+    if (req.user.role === "operator" && req.user.assigned_zone) {
+      const nodeResult = await pool.query("SELECT 1 FROM nodes WHERE node_id=$1 AND (name ILIKE $2 OR description ILIKE $2)", [alertResult.rows[0].node_id, `%${req.user.assigned_zone}%`]);
+      if (!nodeResult.rowCount) return res.status(403).json({ error: "alert outside assigned scope" });
+    }
     const q = `INSERT INTO alert_events (alert_id, event_type, user_agent, operator)
                VALUES ($1,$2,$3,$4) RETURNING *`;
     const vals = [
@@ -714,7 +824,8 @@ async function handleAlert(payload) {
       response = { error: err.message };
     }
     await pool.query(
-      `INSERT INTO alert_recipients (alert_id, subscriber_id, status, delivery_provider, provider_response, sent_at, attempts, next_attempt_at, last_error)
+      `INSERT INTO alert_recipients (alert_id, subscriber_id, status, delivery_provider,
+      provider_response, sent_at, attempts, next_attempt_at, last_error)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
       [
         alertId,
@@ -808,16 +919,19 @@ function serverEvaluateStatus(payload) {
   }
   const waterLevelCm = Number(payload.water_level_cm);
   const previous = nodeStatusMap.get(payload.node_id) || "NORMAL";
+  const thresholds = app.locals.thresholds || runtimeThresholds;
+  const warningThreshold = Number(thresholds.warning_cm);
+  const criticalThreshold = Number(thresholds.critical_cm);
 
   let next = previous;
   if (previous === "CRITICAL") {
-    if (waterLevelCm < Number(CRITICAL_LEVEL_CM) - 3)
-      next = waterLevelCm < Number(WARNING_LEVEL_CM) - 3 ? "NORMAL" : "WARNING";
+    if (waterLevelCm < criticalThreshold - 3)
+      next = waterLevelCm < warningThreshold - 3 ? "NORMAL" : "WARNING";
   } else if (previous === "WARNING") {
-    if (waterLevelCm >= Number(CRITICAL_LEVEL_CM)) next = "CRITICAL";
-    else if (waterLevelCm < Number(WARNING_LEVEL_CM) - 3) next = "NORMAL";
-  } else if (waterLevelCm >= Number(CRITICAL_LEVEL_CM)) next = "CRITICAL";
-  else if (waterLevelCm >= Number(WARNING_LEVEL_CM)) next = "WARNING";
+    if (waterLevelCm >= criticalThreshold) next = "CRITICAL";
+    else if (waterLevelCm < warningThreshold - 3) next = "NORMAL";
+  } else if (waterLevelCm >= criticalThreshold) next = "CRITICAL";
+  else if (waterLevelCm >= warningThreshold) next = "WARNING";
 
   nodeStatusMap.set(payload.node_id, next);
   return next;
@@ -830,11 +944,15 @@ client.on("message", async (topic, message) => {
     if (!payload) return;
 
     const nodeResult = await pool.query(
-      "SELECT lat, lng FROM nodes WHERE node_id = $1",
+      "SELECT lat, lng, active FROM nodes WHERE node_id = $1",
       [payload.node_id],
     );
     if (nodeResult.rows.length === 0) {
       throw new Error(`Unknown sensor node ${payload.node_id}`);
+    }
+    if (!nodeResult.rows[0].active) {
+      console.warn(`Ignoring reading from disabled node ${payload.node_id}`);
+      return;
     }
 
     payload.status = serverEvaluateStatus(payload);

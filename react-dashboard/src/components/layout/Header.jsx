@@ -7,7 +7,7 @@ export default function Header({
   alertCount = 0,
 }) {
   return (
-    <header className="flex h-16 items-center justify-between border-b border-slate-200 bg-white px-4 sm:px-6">
+    <header className="sticky top-0 z-30 flex h-16 items-center justify-between border-b border-slate-200 bg-white px-4 sm:px-6 shadow-sm">
       <div className="flex items-center gap-3">
         <button
           className="lg:hidden rounded-lg p-2 text-slate-500 hover:bg-slate-100"
@@ -20,7 +20,7 @@ export default function Header({
             {title}
           </h1>
           <p className="hidden text-xs text-slate-500 sm:block">
-            Real-time flood and grid risk monitoring
+            Real-time flood and grid hazard monitoring
           </p>
         </div>
       </div>

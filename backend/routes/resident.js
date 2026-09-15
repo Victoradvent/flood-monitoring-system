@@ -1,6 +1,7 @@
 const express = require("express");
 const router = express.Router();
 const pool = require("../db");
+const { authMiddleware, requireRole } = require("../auth");
 
 const lookupAttempts = new Map();
 const LOOKUP_WINDOW_MS = 15 * 60 * 1000;
@@ -44,11 +45,8 @@ function safetyMessage(status) {
   return "Water levels near your area are normal. No action needed right now.";
 }
 
-router.get("/status", async (req, res) => {
-  const phone = normalizePhone(req.query.phone);
-  if (!phone) {
-    return res.status(400).json({ error: "phone query parameter is required" });
-  }
+router.get("/status", authMiddleware, requireRole("resident"), async (req, res) => {
+  const phone = normalizePhone(req.user.username);
   if (!allowLookup(req.ip)) {
     return res.status(429).json({ error: "Too many status lookups; try again later" });
   }

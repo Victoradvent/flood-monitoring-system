@@ -1,0 +1,16 @@
+UPDATE users SET role = 'resident' WHERE role = 'viewer';
+UPDATE users SET role = 'resident' WHERE role IS NULL;
+UPDATE subscribers SET role = 'resident' WHERE role IS NULL;
+ALTER TABLE users ALTER COLUMN role SET NOT NULL;
+ALTER TABLE subscribers ALTER COLUMN role SET NOT NULL;
+ALTER TABLE users ALTER COLUMN role SET DEFAULT 'resident';
+ALTER TABLE users ADD CONSTRAINT users_role_values CHECK (role IN ('admin', 'operator', 'resident'));
+ALTER TABLE subscribers ADD CONSTRAINT subscribers_role_values CHECK (role IN ('admin', 'operator', 'resident'));
+ALTER TABLE alerts ADD COLUMN IF NOT EXISTS resolution_status TEXT NOT NULL DEFAULT 'OPEN';
+ALTER TABLE alerts ADD COLUMN IF NOT EXISTS resolved_by TEXT;
+ALTER TABLE alerts ADD COLUMN IF NOT EXISTS resolved_at TIMESTAMP WITH TIME ZONE;
+ALTER TABLE alerts ADD COLUMN IF NOT EXISTS resolution_reason TEXT;
+ALTER TABLE alerts ADD CONSTRAINT alerts_resolution_values CHECK (resolution_status IN ('OPEN', 'RESOLVED', 'SUPPRESSED'));
+ALTER TABLE users ADD COLUMN IF NOT EXISTS active BOOLEAN NOT NULL DEFAULT TRUE;
+ALTER TABLE readings ADD CONSTRAINT readings_node_fk FOREIGN KEY (node_id) REFERENCES nodes(node_id) NOT VALID;
+ALTER TABLE alerts ADD CONSTRAINT alerts_node_fk FOREIGN KEY (node_id) REFERENCES nodes(node_id) NOT VALID;

@@ -3,7 +3,7 @@ import axios from "axios";
 import Card from "./components/ui/Card";
 import Badge from "./components/ui/Badge";
 import Icon from "./components/ui/Icon";
-export default function GridPanel({ token }) {
+export default function GridPanel({ token, role }) {
   const [equipment, setEquipment] = useState([]);
   useEffect(() => {
     if (!token) return;
@@ -12,7 +12,7 @@ export default function GridPanel({ token }) {
       .then((r) => setEquipment(r.data))
       .catch((e) => console.error("Error fetching equipment", e));
     const protocol = location.protocol === "https:" ? "wss:" : "ws:";
-    const ws = new WebSocket(`${protocol}//${location.host}/ws`);
+    const ws = new WebSocket(`${protocol}//${location.host}/ws?token=${encodeURIComponent(token)}`);
     ws.onmessage = (e) => {
       try {
         const m = JSON.parse(e.data);
@@ -40,6 +40,14 @@ export default function GridPanel({ token }) {
     } catch (e) {
       console.error("Recommendation error", e);
     }
+  };
+  const inspect = async (id) => {
+    const notes = window.prompt("Inspection notes:");
+    if (!notes || !notes.trim()) return;
+    try {
+      const r = await axios.post(`/grid-inspection/${id}/inspect`, { notes: notes.trim() }, { headers: { Authorization: `Bearer ${token}` } });
+      setEquipment((p) => p.map((x) => (x.id === id ? r.data.equipment : x)));
+    } catch (e) { console.error("Inspection error", e); }
   };
   const recommended = equipment.filter((x) => x.recommended);
   return (
@@ -112,12 +120,10 @@ export default function GridPanel({ token }) {
                     )}
                   </td>
                   <td className="text-right">
-                    <button
-                      onClick={() => recommend(x.id)}
-                      className="secondary-btn px-3 py-1.5 text-xs"
-                    >
-                      View / Recommend
-                    </button>
+                    <div className="flex justify-end gap-2">
+                      {(role === "admin" || role === "operator") && <button onClick={() => recommend(x.id)} className="secondary-btn px-3 py-1.5 text-xs">Recommend cutoff</button>}
+                      {(role === "admin" || role === "operator") && <button onClick={() => inspect(x.id)} className="secondary-btn px-3 py-1.5 text-xs">Inspect</button>}
+                    </div>
                   </td>
                 </tr>
               ))}

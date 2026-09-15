@@ -8,8 +8,7 @@ import {
 } from "./notifications";
 import Badge from "./components/ui/Badge";
 import Icon from "./components/ui/Icon";
-const PHONE_KEY = "resident_phone",
-  POLL_MS = 30000;
+const POLL_MS = 30000;
 function timeAgo(s) {
   if (!s) return "No readings yet";
   const m = Math.round((Date.now() - new Date(s).getTime()) / 60000);
@@ -19,24 +18,18 @@ function timeAgo(s) {
   if (h < 24) return `${h} hr ago`;
   return new Date(s).toLocaleString();
 }
-export default function ResidentDashboard() {
-  const [phone, setPhone] = useState(""),
-    [savedPhone, setSavedPhone] = useState(
-      localStorage.getItem(PHONE_KEY) || "",
-    ),
-    [data, setData] = useState(null),
+export default function ResidentDashboard({ token }) {
+  const [data, setData] = useState(null),
     [error, setError] = useState(""),
     [loading, setLoading] = useState(false);
-  const fetchStatus = useCallback(async (p) => {
+  const fetchStatus = useCallback(async () => {
     setLoading(true);
     setError("");
     try {
-      const r = await fetch(`/resident/status?phone=${encodeURIComponent(p)}`);
+      const r = await fetch("/resident/status", { headers: { Authorization: `Bearer ${token}` } });
       const b = await r.json();
       if (!r.ok) throw new Error(b.error || "Could not find your address");
       setData(b);
-      localStorage.setItem(PHONE_KEY, p);
-      setSavedPhone(p);
       requestPermission();
     } catch (e) {
       setError(e.message);
@@ -44,15 +37,15 @@ export default function ResidentDashboard() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [token]);
   useEffect(() => {
-    if (savedPhone) fetchStatus(savedPhone);
-  }, [savedPhone, fetchStatus]);
+    if (token) fetchStatus();
+  }, [token, fetchStatus]);
   useEffect(() => {
-    if (!savedPhone) return;
-    const i = setInterval(() => fetchStatus(savedPhone), POLL_MS);
+    if (!token) return undefined;
+    const i = setInterval(() => fetchStatus(), POLL_MS);
     return () => clearInterval(i);
-  }, [savedPhone, fetchStatus]);
+  }, [token, fetchStatus]);
   useEffect(() => {
     if (!data || !data.nodes.length) return;
     const ids = new Set(data.nodes.map((n) => n.node_id));
@@ -92,11 +85,10 @@ export default function ResidentDashboard() {
       }
     });
   }, [data]);
-  const changeNumber = () => {
-    localStorage.removeItem(PHONE_KEY);
-    setSavedPhone("");
-    setData(null);
-    setPhone("");
+  const logout = () => {
+    localStorage.removeItem("jwt");
+    localStorage.removeItem("role");
+    window.location.href = "/resident";
   };
   if (!data)
     return (
@@ -109,27 +101,9 @@ export default function ResidentDashboard() {
             Flood Alert Status
           </h1>
           <p className="mt-2 text-center text-sm leading-6 text-slate-500">
-            Enter the phone number you registered with your community
-            coordinator to see the flood status for your area.
+            Sign in with your resident account to see the flood status for your area.
           </p>
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              if (phone.trim()) fetchStatus(phone.trim());
-            }}
-            className="mt-6 space-y-3"
-          >
-            <input
-              className="input-field"
-              placeholder="e.g. +2348000000001"
-              value={phone}
-              onChange={(e) => setPhone(e.target.value)}
-              required
-            />
-            <button className="primary-btn w-full" disabled={loading}>
-              {loading ? "Checking…" : "Check Status"}
-            </button>
-          </form>
+          <p className="mt-6 text-center text-sm text-red-700">{error || "Resident account authentication is required."}</p>
           {error && (
             <p className="mt-4 rounded-lg bg-red-50 p-3 text-sm text-red-700">
               {error}
@@ -164,8 +138,8 @@ export default function ResidentDashboard() {
                 : "Your Flood Status"}
             </h1>
           </div>
-          <button onClick={changeNumber} className="secondary-btn text-xs">
-            Use a different number
+          <button onClick={logout} className="secondary-btn text-xs">
+            Sign out
           </button>
         </div>
         {loading && <p className="mb-3 text-xs text-slate-500">Refreshing…</p>}

@@ -2,6 +2,7 @@ const express = require("express");
 const router = express.Router();
 const pool = require("../db");
 const { authMiddleware, requireRole } = require("../auth");
+const { logAudit } = require("../utils/audit");
 
 router.get("/", authMiddleware, requireRole("admin"), async (req, res) => {
   try {
@@ -19,10 +20,14 @@ router.post("/", authMiddleware, requireRole("admin"), async (req, res) => {
       return res
         .status(400)
         .json({ error: "name, phone and node_id are required" });
+    if (!["resident", "operator", "admin"].includes(role)) {
+      return res.status(400).json({ error: "invalid subscriber role" });
+    }
     const { rows } = await pool.query(
       "INSERT INTO subscribers (name, phone, node_id, role) VALUES ($1, $2, $3, $4) RETURNING *",
       [name, phone, node_id, role],
     );
+    await logAudit(null, req.user.user_id, "CREATE_SUBSCRIBER", `subscriber_id=${rows[0].id}`);
     res.status(201).json(rows[0]);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -37,6 +42,7 @@ router.delete(
     try {
       const { id } = req.params;
       await pool.query("DELETE FROM subscribers WHERE id = $1", [id]);
+      await logAudit(null, req.user.user_id, "DELETE_SUBSCRIBER", `subscriber_id=${id}`);
       res.json({ success: true });
     } catch (err) {
       res.status(500).json({ error: err.message });
