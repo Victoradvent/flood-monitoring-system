@@ -1,3 +1,7 @@
 user mqtt_user
 topic write nodes/flood
 topic read nodes/flood
+topic read nodes/flood/simulated
+
+user sim_user
+topic write nodes/flood/simulated

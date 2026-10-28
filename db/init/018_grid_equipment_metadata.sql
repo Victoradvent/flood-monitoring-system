@@ -1,0 +1,4 @@
+ALTER TABLE grid_equipment
+  ADD COLUMN IF NOT EXISTS equipment_code TEXT UNIQUE,
+  ADD COLUMN IF NOT EXISTS risk_zone TEXT NOT NULL DEFAULT 'MEDIUM',
+  ADD COLUMN IF NOT EXISTS historical_readings JSONB NOT NULL DEFAULT '[]'::jsonb;

@@ -11,19 +11,38 @@ router.post(
   requireAnyRole(["admin", "operator"]),
   async (req, res) => {
     const id = req.params.id;
-    const { notes } = req.body;
+    const notes = typeof req.body?.notes === "string" ? req.body.notes.trim() : "";
+    if (!notes) return res.status(400).json({ error: "inspection notes are required" });
+    let database;
+    let transactionStarted = false;
 
     try {
-      const r = await pool.query(
-        `UPDATE grid_equipment SET status='CLEARED', recommended=FALSE, description=$1
-       WHERE id=$2 RETURNING *`,
-        [`Inspection complete: ${notes || "No notes provided"}`, id],
+      database = await pool.connect();
+      await database.query("BEGIN");
+      transactionStarted = true;
+      const r = await database.query(
+        `UPDATE grid_equipment SET status='CLEARED', recommended=FALSE, recommended_at=NULL
+       WHERE id=$1 RETURNING *`,
+        [id],
       );
 
-      if (r.rowCount === 0)
+      if (r.rowCount === 0) {
+        await database.query("ROLLBACK");
+        transactionStarted = false;
         return res.status(404).json({ error: "Equipment not found" });
+      }
 
       const equipment = r.rows[0];
+      await logAudit(
+        id,
+        req.user.user_id,
+        "INSPECTION_COMPLETED",
+        notes,
+        database,
+      );
+      await database.query("COMMIT");
+      transactionStarted = false;
+
       const inspectionNotified = req.app.get("inspectionNotified");
       if (inspectionNotified && inspectionNotified.delete) {
         inspectionNotified.delete(equipment.id);
@@ -41,24 +60,22 @@ router.post(
         }
       });
 
-      try {
-        await logAudit(
-          id,
-          req.user.user_id,
-          "INSPECTION_COMPLETED",
-          notes || "No notes provided",
-        );
-      } catch (err) {
-        console.error("Audit log error", err);
-      }
-
       res.json({
         message: "Inspection confirmed; cutoff recommendation cleared",
         equipment,
       });
     } catch (err) {
+      if (transactionStarted) {
+        try {
+          await database.query("ROLLBACK");
+        } catch (rollbackError) {
+          console.error("Inspection transaction rollback failed", rollbackError);
+        }
+      }
       console.error("Inspection route error", err);
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: "Unable to record inspection" });
+    } finally {
+      if (database) database.release();
     }
   },
 );

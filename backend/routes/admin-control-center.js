@@ -2,11 +2,12 @@ const express = require("express");
 const router = express.Router();
 const pool = require("../db");
 const { authMiddleware, requireRole } = require("../auth");
+const { areValidThresholds } = require("../services/telemetrySafety");
 
 router.use(authMiddleware, requireRole("admin"));
 
-async function audit(userId, action, notes) {
-  await pool.query(
+async function audit(userId, action, notes, database = pool) {
+  await database.query(
     "INSERT INTO audit_logs (operator_id, action, notes) VALUES ($1, $2, $3)",
     [userId, action, notes],
   );
@@ -76,20 +77,49 @@ router.delete("/subscribers/:id", async (req, res) => {
 router.put("/thresholds", async (req, res) => {
   const reason = typeof req.body?.reason === "string" ? req.body.reason.trim() : "";
   if (!reason) return res.status(400).json({ error: "reason is required" });
-  const warning = Number(req.body?.warning_cm);
-  const critical = Number(req.body?.critical_cm);
-  if (!Number.isFinite(warning) || !Number.isFinite(critical) || warning < 0 || critical <= warning) {
-    return res.status(400).json({ error: "critical_cm must be greater than warning_cm" });
+  const warningInput = req.body?.warning_cm;
+  const criticalInput = req.body?.critical_cm;
+  const warning =
+    (typeof warningInput === "number" ||
+      (typeof warningInput === "string" && warningInput.trim() !== ""))
+      ? Number(warningInput)
+      : Number.NaN;
+  const critical =
+    (typeof criticalInput === "number" ||
+      (typeof criticalInput === "string" && criticalInput.trim() !== ""))
+      ? Number(criticalInput)
+      : Number.NaN;
+  if (!areValidThresholds({ warning_cm: warning, critical_cm: critical })) {
+    return res.status(400).json({ error: "thresholds must satisfy 0 <= warning_cm < critical_cm <= 1000" });
   }
+  let database;
+  let transactionStarted = false;
   try {
+    database = await pool.connect();
     const value = { warning_cm: warning, critical_cm: critical };
-    req.app.locals.thresholds = value;
-    await pool.query(`INSERT INTO system_settings (setting_key, setting_value, updated_by)
+    await database.query("BEGIN");
+    transactionStarted = true;
+    await database.query(`INSERT INTO system_settings (setting_key, setting_value, updated_by)
       VALUES ('thresholds', $1::jsonb, $2)
       ON CONFLICT (setting_key) DO UPDATE SET setting_value = EXCLUDED.setting_value, updated_at = NOW(), updated_by = EXCLUDED.updated_by`, [JSON.stringify(value), req.user.user_id]);
-    await audit(req.user.user_id, "UPDATE_THRESHOLDS", `${JSON.stringify(value)}; reason=${reason}`);
+    await audit(req.user.user_id, "UPDATE_THRESHOLDS", `${JSON.stringify(value)}; reason=${reason}`, database);
+    await database.query("COMMIT");
+    transactionStarted = false;
+    req.app.locals.thresholds = value;
     res.json(value);
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) {
+    if (transactionStarted) {
+      try {
+        await database.query("ROLLBACK");
+      } catch (rollbackError) {
+        console.error("Threshold transaction rollback failed", rollbackError);
+      }
+    }
+    console.error("Threshold update failed", err);
+    res.status(500).json({ error: "Unable to update thresholds" });
+  } finally {
+    if (database) database.release();
+  }
 });
 
 router.patch("/nodes/:id", async (req, res) => {

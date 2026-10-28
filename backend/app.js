@@ -42,6 +42,7 @@ const {
   MQTT_USER,
   MQTT_PASS,
   MQTT_TOPIC,
+  MQTT_SIM_TOPIC = "nodes/flood/simulated",
   PG_HOST,
   PG_PORT,
   PG_USER,
@@ -62,18 +63,45 @@ const {
   SMS_SIM_MIN_DELAY_MS = 100,
   SMS_SIM_MAX_DELAY_MS = 500,
   SMS_SIM_SEED = "fms-sms",
+  READING_STALE_AFTER_SEC = "30",
   MQTT_TLS = "false",
   MQTT_CA_FILE,
   PORT = 3000,
 } = process.env;
 const VALID_ROLES = new Set(["admin", "operator", "resident"]);
+const READING_STALE_AFTER_MS = Number(READING_STALE_AFTER_SEC) * 1000;
+const {
+  areValidThresholds,
+  classifyTelemetrySource,
+  evaluateStatus,
+  isFreshReading,
+  isNewerReading,
+} = require("./services/telemetrySafety");
 
 const SECRET = process.env.JWT_SECRET;
 if (!SECRET) {
   console.error("FATAL: JWT_SECRET environment variable is required");
   process.exit(1);
 }
+if (!Number.isFinite(READING_STALE_AFTER_MS) || READING_STALE_AFTER_MS <= 0) {
+  console.error("FATAL: READING_STALE_AFTER_SEC must be a positive number");
+  process.exit(1);
+}
 const mqttUrl = `${String(MQTT_TLS).toLowerCase() === "true" ? "mqtts" : "mqtt"}://${MQTT_BROKER}:${MQTT_PORT}`;
+if (
+  process.env.NODE_ENV === "production" &&
+  String(MQTT_TLS).toLowerCase() !== "true"
+) {
+  console.error("FATAL: MQTT_TLS=true is required in production");
+  process.exit(1);
+}
+if (
+  String(MQTT_TLS).toLowerCase() === "true" &&
+  (!MQTT_USER || !MQTT_PASS)
+) {
+  console.error("FATAL: MQTT credentials are required when TLS is enabled");
+  process.exit(1);
+}
 
 // Twilio client (if configured)
 const twilioClient =
@@ -96,11 +124,14 @@ const smsProvider = createSmsProvider({
 
 // In-memory cooldown map: { "<node_id>::<level>": timestamp }
 const cooldownMap = new Map();
-const nodeStatusMap = new Map();
 const runtimeThresholds = {
   warning_cm: Number(WARNING_LEVEL_CM),
   critical_cm: Number(CRITICAL_LEVEL_CM),
 };
+if (!areValidThresholds(runtimeThresholds)) {
+  console.error("FATAL: warning/critical thresholds are invalid");
+  process.exit(1);
+}
 
 // WebSocket server for dashboard
 const app = express();
@@ -108,11 +139,35 @@ const server = require("http").createServer(app);
 const wss = new WebSocket.Server({ noServer: true });
 app.set("wss", wss);
 app.locals.thresholds = runtimeThresholds;
-pool.query("SELECT setting_value FROM system_settings WHERE setting_key = 'thresholds'")
-  .then((result) => {
-    if (result.rows[0]?.setting_value) app.locals.thresholds = result.rows[0].setting_value;
-  })
-  .catch((err) => console.warn("Threshold settings will use environment defaults", err.message));
+let thresholdsReady = false;
+let loadingThresholds = false;
+async function loadThresholds() {
+  if (loadingThresholds || thresholdsReady) return;
+  loadingThresholds = true;
+  try {
+    const result = await pool.query(
+      "SELECT setting_value FROM system_settings WHERE setting_key = 'thresholds'",
+    );
+    if (result.rows[0]?.setting_value) {
+      if (!areValidThresholds(result.rows[0].setting_value)) {
+        console.error("FATAL: persisted warning/critical thresholds are invalid");
+        process.exit(1);
+      }
+      app.locals.thresholds = result.rows[0].setting_value;
+    }
+    thresholdsReady = true;
+  } finally {
+    loadingThresholds = false;
+  }
+}
+loadThresholds().catch((err) =>
+  console.warn("Threshold settings are unavailable; telemetry processing is disabled", err.message),
+);
+setInterval(() => {
+  loadThresholds().catch((err) =>
+    console.warn("Threshold settings are unavailable; telemetry processing is disabled", err.message),
+  );
+}, 30000).unref();
 app.use(cors());
 app.use(express.json());
 
@@ -128,7 +183,9 @@ async function websocketContext(user) {
     );
     return { ...currentUser, nodeIds: new Set(result.rows.map((row) => row.node_id)) };
   }
-  if (!currentUser.assigned_zone) return { ...currentUser, nodeIds: null };
+  if (!currentUser.assigned_zone) {
+    return { ...currentUser, nodeIds: new Set() };
+  }
   const result = await pool.query(
     "SELECT node_id FROM nodes WHERE name ILIKE $1 OR description ILIKE $1",
     [`%${currentUser.assigned_zone}%`],
@@ -138,6 +195,7 @@ async function websocketContext(user) {
 
 function websocketCanReceive(context, event) {
   if (context.role === "admin") return true;
+  if (event.type === "simulation_reading") return false;
   if (event.type === "reading") return context.nodeIds === null || context.nodeIds.has(event.payload?.node_id);
   if (event.type === "alert") return context.nodeIds === null || context.nodeIds.has(event.node);
   if (["grid_recommendation", "grid_hazard", "inspection_complete"].includes(event.type)) {
@@ -173,8 +231,25 @@ function broadcast(obj) {
   });
 }
 
-// Simple health endpoint
-app.get("/health", (req, res) => res.json({ status: "NORMAL" }));
+app.get("/health", async (req, res) => {
+  const checks = {
+    database: "UP",
+    mqtt: client.connected ? "UP" : "DOWN",
+    thresholds: thresholdsReady ? "UP" : "DOWN",
+  };
+  try {
+    await pool.query("SELECT 1");
+  } catch {
+    checks.database = "DOWN";
+  }
+  const ready = Object.values(checks).every((check) => check === "UP");
+  res.status(ready ? 200 : 503).json({
+    status: ready ? "READY" : "DEGRADED",
+    checks,
+    hazard_status: "NOT_EVALUATED",
+    note: "Service health does not indicate flood safety.",
+  });
+});
 
 // Metrics are observational only; no role can mutate operational measurements.
 app.get("/system/metrics", authMiddleware, requireAnyRole(["admin", "operator"]), async (req, res) => {
@@ -350,6 +425,16 @@ app.get(
     if (!node) return res.status(400).json({ error: "node query required" });
 
     try {
+      if (req.user.role === "operator") {
+        if (!req.user.assigned_zone) {
+          return res.status(403).json({ error: "Operator zone is not configured" });
+        }
+        const scope = await pool.query(
+          "SELECT 1 FROM nodes WHERE node_id=$1 AND (name ILIKE $2 OR description ILIKE $2)",
+          [node, `%${req.user.assigned_zone}%`],
+        );
+        if (!scope.rowCount) return res.status(403).json({ error: "Node outside assigned scope" });
+      }
       const q = `SELECT timestamp, water_level_cm FROM readings WHERE node_id = $1 ORDER BY timestamp DESC LIMIT $2`;
       const r = await pool.query(q, [node, limit]);
       res.json(r.rows);
@@ -382,7 +467,10 @@ app.post("/alert-events", authMiddleware, async (req, res) => {
   try {
     const alertResult = await pool.query("SELECT node_id FROM alerts WHERE id=$1", [alert_id]);
     if (!alertResult.rowCount) return res.status(404).json({ error: "alert not found" });
-    if (req.user.role === "operator" && req.user.assigned_zone) {
+    if (req.user.role === "operator") {
+      if (!req.user.assigned_zone) {
+        return res.status(403).json({ error: "Operator zone is not configured" });
+      }
       const nodeResult = await pool.query("SELECT 1 FROM nodes WHERE node_id=$1 AND (name ILIKE $2 OR description ILIKE $2)", [alertResult.rows[0].node_id, `%${req.user.assigned_zone}%`]);
       if (!nodeResult.rowCount) return res.status(403).json({ error: "alert outside assigned scope" });
     }
@@ -549,7 +637,7 @@ const client = mqtt.connect(mqttUrl, mqttOptions);
 
 client.on("connect", () => {
   console.log("MQTT connected");
-  client.subscribe(MQTT_TOPIC, { qos: 1 }, (err) => {
+  client.subscribe([MQTT_TOPIC, MQTT_SIM_TOPIC], { qos: 1 }, (err) => {
     if (err) console.error("Subscribe error", err);
   });
 });
@@ -578,6 +666,8 @@ function parsePayload(msg) {
       throw new Error("battery_v is out of range");
     if (!["NORMAL", "WARNING", "CRITICAL", "SENSOR_ERROR"].includes(obj.status))
       throw new Error("status is invalid");
+    if (obj.simulated !== undefined && typeof obj.simulated !== "boolean")
+      throw new Error("simulated must be a boolean");
     if (obj.status === "SENSOR_ERROR" && obj.water_level_cm !== null)
       throw new Error("sensor errors must not contain a water level");
     if (obj.status !== "SENSOR_ERROR" && typeof obj.water_level_cm !== "number")
@@ -591,18 +681,74 @@ function parsePayload(msg) {
 
 // Insert reading into DB
 async function saveReading(payload, raw) {
-  const q = `INSERT INTO readings (node_id, timestamp, water_level_cm, battery_v, status, raw_payload)
-             VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`;
-  const vals = [
-    payload.node_id,
-    payload.timestamp,
-    payload.water_level_cm,
-    payload.battery_v ?? null,
-    payload.status,
-    raw,
-  ];
-  const res = await pool.query(q, vals);
-  return res.rows[0].id;
+  const dbClient = await pool.connect();
+  let transactionStarted = false;
+  try {
+    await dbClient.query("BEGIN");
+    transactionStarted = true;
+    await dbClient.query("SELECT pg_advisory_xact_lock(hashtext($1))", [
+      payload.node_id,
+    ]);
+
+    const latestResult = await dbClient.query(
+      "SELECT timestamp FROM readings WHERE node_id=$1 ORDER BY timestamp DESC, id DESC LIMIT 1",
+      [payload.node_id],
+    );
+    if (
+      !isNewerReading(
+        payload.timestamp,
+        latestResult.rows[0]?.timestamp,
+      )
+    ) {
+      await dbClient.query("ROLLBACK");
+      transactionStarted = false;
+      return null;
+    }
+
+    const previousResult = await dbClient.query(
+      `SELECT status FROM readings
+        WHERE node_id=$1 AND status <> 'SENSOR_ERROR'
+        ORDER BY timestamp DESC, id DESC LIMIT 1`,
+      [payload.node_id],
+    );
+    if (!isFreshReading(payload.timestamp, Date.now(), READING_STALE_AFTER_MS)) {
+      await dbClient.query("ROLLBACK");
+      transactionStarted = false;
+      return null;
+    }
+    payload.status = evaluateStatus(
+      payload,
+      previousResult.rows[0]?.status,
+      app.locals.thresholds || runtimeThresholds,
+    );
+
+    const result = await dbClient.query(
+      `INSERT INTO readings (node_id, timestamp, water_level_cm, battery_v, status, raw_payload)
+       VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
+      [
+        payload.node_id,
+        payload.timestamp,
+        payload.water_level_cm,
+        payload.battery_v ?? null,
+        payload.status,
+        raw,
+      ],
+    );
+    await dbClient.query("COMMIT");
+    transactionStarted = false;
+    return result.rows[0].id;
+  } catch (error) {
+    if (transactionStarted) {
+      try {
+        await dbClient.query("ROLLBACK");
+      } catch (rollbackError) {
+        console.error("Reading transaction rollback failed", rollbackError);
+      }
+    }
+    throw error;
+  } finally {
+    dbClient.release();
+  }
 }
 
 // Insert alert record
@@ -669,37 +815,50 @@ async function maybeTriggerGridHazard(payload) {
     const result = await pool.query(query, [nodeId]);
 
     for (const equipment of result.rows) {
-      const updateResult = await pool.query(
-        `
-        UPDATE grid_equipment
-        SET
-          recommended = TRUE,
-          status = 'CUTOFF_RECOMMENDED',
-          recommended_at = NOW()
-        WHERE id = $1
-        RETURNING *
-        `,
-        [equipment.id],
-      );
-
-      const recommended = updateResult.rows[0];
-
-      const message =
-        `Flood detected near ` +
-        `${recommended.name}. ` +
-        `Cutoff recommended.`;
-
+      const database = await pool.connect();
+      let transactionStarted = false;
+      let recommended;
       try {
+        await database.query("BEGIN");
+        transactionStarted = true;
+        const updateResult = await database.query(
+          `UPDATE grid_equipment
+              SET recommended=TRUE, status='CUTOFF_RECOMMENDED', recommended_at=NOW()
+            WHERE id=$1 AND status='NORMAL' RETURNING *`,
+          [equipment.id],
+        );
+        if (!updateResult.rowCount) {
+          await database.query("ROLLBACK");
+          transactionStarted = false;
+          continue;
+        }
+        recommended = updateResult.rows[0];
         await logAudit(
           recommended.id,
           null,
           "AUTO_RECOMMEND_CUTOFF",
           `Automatic cutoff recommendation generated because ${nodeId} reached CRITICAL flood level.`,
-          message,
+          database,
         );
-      } catch (auditError) {
-        console.error("Automatic recommendation audit error", auditError);
+        await database.query("COMMIT");
+        transactionStarted = false;
+      } catch (error) {
+        if (transactionStarted) {
+          try {
+            await database.query("ROLLBACK");
+          } catch (rollbackError) {
+            console.error("Automatic recommendation rollback failed", rollbackError);
+          }
+        }
+        throw error;
+      } finally {
+        database.release();
       }
+
+      const message =
+        `Flood detected near ` +
+        `${recommended.name}. ` +
+        `Cutoff recommended.`;
 
       broadcast({
         type: "grid_recommendation",
@@ -912,36 +1071,33 @@ setInterval(() => {
   retryFailedDeliveries().catch((err) => console.error("SMS retry worker error", err));
 }, 60000).unref();
 
-// Server-side threshold evaluation (optional redundancy)
-function serverEvaluateStatus(payload) {
-  if (payload.status === "SENSOR_ERROR" || payload.water_level_cm === null) {
-    return "SENSOR_ERROR";
-  }
-  const waterLevelCm = Number(payload.water_level_cm);
-  const previous = nodeStatusMap.get(payload.node_id) || "NORMAL";
-  const thresholds = app.locals.thresholds || runtimeThresholds;
-  const warningThreshold = Number(thresholds.warning_cm);
-  const criticalThreshold = Number(thresholds.critical_cm);
-
-  let next = previous;
-  if (previous === "CRITICAL") {
-    if (waterLevelCm < criticalThreshold - 3)
-      next = waterLevelCm < warningThreshold - 3 ? "NORMAL" : "WARNING";
-  } else if (previous === "WARNING") {
-    if (waterLevelCm >= criticalThreshold) next = "CRITICAL";
-    else if (waterLevelCm < warningThreshold - 3) next = "NORMAL";
-  } else if (waterLevelCm >= criticalThreshold) next = "CRITICAL";
-  else if (waterLevelCm >= warningThreshold) next = "WARNING";
-
-  nodeStatusMap.set(payload.node_id, next);
-  return next;
-}
-
 // MQTT message handler
 client.on("message", async (topic, message) => {
   try {
     const payload = parsePayload(message);
     if (!payload) return;
+    const source = classifyTelemetrySource(
+      topic,
+      MQTT_TOPIC,
+      MQTT_SIM_TOPIC,
+      payload.simulated,
+    );
+    if (source === "SIMULATED") {
+      broadcast({ type: "simulation_reading", payload });
+      return;
+    }
+    if (source !== "FIELD") {
+      console.warn(`Ignoring telemetry from an invalid topic/source for ${payload.node_id}`);
+      return;
+    }
+    if (!thresholdsReady) {
+      console.warn("Ignoring field reading while threshold settings are unavailable");
+      return;
+    }
+    if (!isFreshReading(payload.timestamp, Date.now(), READING_STALE_AFTER_MS)) {
+      console.warn(`Ignoring stale or future reading from ${payload.node_id}`);
+      return;
+    }
 
     const nodeResult = await pool.query(
       "SELECT lat, lng, active FROM nodes WHERE node_id = $1",
@@ -955,10 +1111,11 @@ client.on("message", async (topic, message) => {
       return;
     }
 
-    payload.status = serverEvaluateStatus(payload);
-
-    // Save reading
-    await saveReading(payload, message.toString());
+    const readingId = await saveReading(payload, message.toString());
+    if (!readingId) {
+      console.warn(`Ignoring duplicate or out-of-order reading from ${payload.node_id}`);
+      return;
+    }
 
     // Enrich with coordinates
     try {

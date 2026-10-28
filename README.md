@@ -18,11 +18,15 @@ Historical data & trending analysis
 
 ```bash
 # Install dependencies
-cd backend && npm install
-cd ../react-dashboard && npm install
+npm --prefix backend ci
+npm --prefix react-dashboard ci
 
 # Set up environment
-cp .env.example .env.local
+cp .env.example .env
+
+# Provision a local Mosquitto password file (the tool prompts for the password)
+mosquitto_passwd -c mosquitto/config/passwordfile mqtt_user
+mosquitto_passwd mosquitto/config/passwordfile sim_user
 
 # Generate development-only MQTT certificates, then start with Docker
 ./scripts/generate-dev-certs.ps1
@@ -37,7 +41,7 @@ docker compose up --build
 
 ### Self-contained simulation
 
-The default Compose configuration is deliberately self-contained for integration testing:
+The default Compose configuration includes an isolated simulator transport for local testing:
 
 ```bash
 docker compose exec backend node scripts/simulate-hardware.js \
@@ -45,35 +49,19 @@ docker compose exec backend node scripts/simulate-hardware.js \
 	--invalid-every=7 --signal-loss-every=5
 ```
 
-This **SIMULATED** ESP32/SIM800L process emits the same JSON contract as `firmware/node.ino`, adds sensor noise and invalid readings, queues readings during simulated GSM signal loss, and flushes them after recovery. The backend uses `SMS_PROVIDER=simulated` by default; it logs recipient, message, delay, rate-limit, failure, and delivery status without contacting a third party.
+This **SIMULATED** ESP32/SIM800L process uses the separate `sim_user` credential and `nodes/flood/simulated` topic. It emits marked synthetic telemetry and queues readings during simulated GSM signal loss. The backend does not persist simulated readings, issue alerts, send SMS, or recommend grid actions; it broadcasts them only to administrator WebSocket clients. Set `MQTT_SIM_PASS` to the distinct password entered for `sim_user`.
 
-The six simulated transformer records are installed by `db/init/014_seed_simulated_grid_equipment.sql` and are visible in the operator map and Grid Monitor.
+Simulation telemetry is explicitly marked and isolated from persisted field readings, alerts, notifications, and grid recommendations. Synthetic node, subscriber, and equipment records are kept in `db/dev-seed/` and must only be loaded into a disposable development database.
 
 The generated certificates under `mosquitto/certs` are **self-signed development-only certificates**. Replace the CA/server certificate and key with organization-issued certificates, use secret management, and review broker ACLs before production deployment. To use a real SMS provider, set `SMS_PROVIDER=twilio` or `SMS_PROVIDER=http_gateway` and provide the corresponding credentials; no application code change is required.
 
 ### Production Deployment
 
-**Choose your deployment platform:**
-
-#### Option A: DigitalOcean (Easiest - 5 min)
-
-- Free via GitHub Student Developer Pack ($50-100 credits)
-- Visual dashboard, click-to-deploy
-- Best for: Quick deployment, beginners
-- Cost: FREE for 1-2 years, ~$20-30/mo after
-- **See [QUICKSTART.md](./QUICKSTART.md)** for quick setup
-- **See [DEPLOYMENT.md](./DEPLOYMENT.md)** for complete guide
-
-#### Option B: Oracle Cloud (Best Value - 30 min)
-
-- Truly FREE forever (always-free tier, no expiration)
-- Linux VM + PostgreSQL database included
-- Best for: Long-term hosting, learning, cost-conscious
-- Cost: $0 forever (no credit card required)
-- **See [QUICKSTART_ORACLE.md](./QUICKSTART_ORACLE.md)** for quick setup
-- **See [DEPLOYMENT_ORACLE.md](./DEPLOYMENT_ORACLE.md)** for complete guide
-
-**Not sure which one?** See [DEPLOYMENT_COMPARISON.md](./DEPLOYMENT_COMPARISON.md) for side-by-side comparison.
+Production deployment is **not ready**. The Compose stack and generated
+certificates are for local development; production secrets, network policy,
+database migration, backup/restore, monitoring, rollback, and deployment
+approval have not been verified. See [docs/OPERATIONS.md](./docs/OPERATIONS.md)
+for release gates and known limitations.
 
 ## Project Structure
 
@@ -171,16 +159,21 @@ Every administrator mutation writes `audit_logs` with actor, action, timestamp, 
 
 ## Environment Variables
 
-See `.env.example` for complete list. Key variables:
+See `.env.example` for development configuration and
+[docs/OPERATIONS.md](./docs/OPERATIONS.md) for release gates. Replace every
+placeholder before starting services. Set `MQTT_PASS` to the password
+provisioned in the local Mosquitto password file. The `.env` file and broker
+credential database are local-only; rotate credentials previously committed
+to Git.
 
 ```bash
 # Database
-DATABASE_URL=postgresql://user:pass@host:5432/db
+DATABASE_URL=REPLACE_WITH_LOCAL_VALUE
 
 # MQTT
 MQTT_BROKER=mqtt://broker_host
 MQTT_USER=user
-MQTT_PASS=password
+MQTT_PASS=REPLACE_WITH_A_UNIQUE_SECRET
 
 # SMS Alerts
 TWILIO_ACCOUNT_SID=...
@@ -188,7 +181,7 @@ TWILIO_AUTH_TOKEN=...
 TWILIO_FROM=+123456789
 
 # Auth
-JWT_SECRET=your_secret_key
+JWT_SECRET=REPLACE_WITH_AT_LEAST_32_RANDOM_BYTES
 ```
 
 ## Technology Stack

@@ -2,6 +2,10 @@ const express = require("express");
 const router = express.Router();
 const pool = require("../db");
 const { authMiddleware, requireRole } = require("../auth");
+const { residentSafetyState } = require("../services/telemetrySafety");
+
+const READING_STALE_AFTER_MS =
+  Number(process.env.READING_STALE_AFTER_SEC || 30) * 1000;
 
 const lookupAttempts = new Map();
 const LOOKUP_WINDOW_MS = 15 * 60 * 1000;
@@ -33,16 +37,6 @@ function normalizePhone(raw) {
   if (!raw) return null;
   const trimmed = raw.trim();
   return trimmed.length > 0 ? trimmed : null;
-}
-
-function safetyMessage(status) {
-  if (status === "CRITICAL") {
-    return "Water levels are critical near your area. Move to higher ground and stay away from electrical equipment and transformers.";
-  }
-  if (status === "WARNING") {
-    return "Water levels are rising near your area. Stay alert, avoid low-lying routes, and keep away from electrical equipment.";
-  }
-  return "Water levels near your area are normal. No action needed right now.";
 }
 
 router.get("/status", authMiddleware, requireRole("resident"), async (req, res) => {
@@ -97,7 +91,11 @@ router.get("/status", authMiddleware, requireRole("resident"), async (req, res) 
       );
 
       const current = latestReading.rows[0] || null;
-      const status = current?.status || "NORMAL";
+      const safetyState = residentSafetyState(
+        current,
+        Date.now(),
+        READING_STALE_AFTER_MS,
+      );
 
       nodes.push({
         node_id: node.node_id,
@@ -105,10 +103,10 @@ router.get("/status", authMiddleware, requireRole("resident"), async (req, res) 
         description: node.description,
         lat: node.lat,
         lng: node.lng,
-        status,
+        ...safetyState,
+        stale_after_seconds: READING_STALE_AFTER_MS / 1000,
         water_level_cm: current?.water_level_cm ?? null,
         last_update: current?.timestamp ?? null,
-        safety_message: safetyMessage(status),
         recent_alerts: recentAlerts.rows.map((a) => ({
           level: a.alert_level,
           water_level_cm: a.water_level_cm,

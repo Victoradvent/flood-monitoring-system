@@ -31,20 +31,32 @@ router.post(
   requireAnyRole(["admin", "operator"]),
   async (req, res) => {
     const id = req.params.id;
+    let database;
+    let transactionStarted = false;
     try {
-      const equipmentRes = await pool.query(
-        "SELECT * FROM grid_equipment WHERE id=$1",
-        [id],
-      );
-      if (equipmentRes.rowCount === 0)
-        return res.status(404).json({ error: "Equipment not found" });
-
-      const updateRes = await pool.query(
+      database = await pool.connect();
+      await database.query("BEGIN");
+      transactionStarted = true;
+      const updateRes = await database.query(
         `UPDATE grid_equipment SET recommended=TRUE, status='CUTOFF_RECOMMENDED',
        recommended_at=NOW() WHERE id=$1 RETURNING *`,
         [id],
       );
+      if (updateRes.rowCount === 0) {
+        await database.query("ROLLBACK");
+        transactionStarted = false;
+        return res.status(404).json({ error: "Equipment not found" });
+      }
       const equipment = updateRes.rows[0];
+      await logAudit(
+        id,
+        req.user.user_id,
+        "RECOMMEND_CUTOFF",
+        "Manual cutoff recommendation issued",
+        database,
+      );
+      await database.query("COMMIT");
+      transactionStarted = false;
 
       // Broadcast recommendation to dashboard
       req.app.get("wss").clients.forEach((client) => {
@@ -59,20 +71,19 @@ router.post(
         }
       });
 
-      try {
-        await logAudit(
-          id,
-          req.user.user_id,
-          "RECOMMEND_CUTOFF",
-          "Manual cutoff recommendation issued",
-        );
-      } catch (err) {
-        console.error("Audit log error", err);
-      }
-
       res.json({ message: "Cutoff recommendation issued", equipment });
     } catch (err) {
-      res.status(500).json({ error: err.message });
+      if (transactionStarted) {
+        try {
+          await database.query("ROLLBACK");
+        } catch (rollbackError) {
+          console.error("Grid recommendation rollback failed", rollbackError);
+        }
+      }
+      console.error("Grid recommendation failed", err);
+      res.status(500).json({ error: "Unable to issue cutoff recommendation" });
+    } finally {
+      if (database) database.release();
     }
   },
 );

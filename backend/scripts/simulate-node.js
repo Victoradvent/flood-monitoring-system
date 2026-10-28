@@ -10,6 +10,7 @@
 // down, publishing one reading every 15 seconds by default. Ctrl+C to stop.
 
 require("dotenv").config();
+const fs = require("fs");
 const mqtt = require("mqtt");
 
 const nodeArgument = process.argv.find((argument) =>
@@ -35,16 +36,30 @@ const intervalMs = Math.max(
 );
 const {
   MQTT_BROKER = "mqtt",
-  MQTT_PORT = 1883,
-  MQTT_USER,
-  MQTT_PASS,
-  MQTT_TOPIC = "nodes/flood",
+  MQTT_PORT = 8883,
+  MQTT_TLS = "true",
+  MQTT_CA_FILE = "/run/mqtt-certs/ca.crt",
+  MQTT_SIM_USER,
+  MQTT_SIM_PASS,
+  MQTT_SIM_TOPIC = "nodes/flood/simulated",
 } = process.env;
 
-const client = mqtt.connect(`mqtt://${MQTT_BROKER}:${MQTT_PORT}`, {
-  username: MQTT_USER,
-  password: MQTT_PASS,
-});
+const tlsEnabled = String(MQTT_TLS).toLowerCase() === "true";
+const options = {
+  username: MQTT_SIM_USER,
+  password: MQTT_SIM_PASS,
+};
+if (tlsEnabled) {
+  if (!fs.existsSync(MQTT_CA_FILE)) {
+    throw new Error(`SIMULATED TLS CA not found: ${MQTT_CA_FILE}`);
+  }
+  options.ca = fs.readFileSync(MQTT_CA_FILE);
+  options.rejectUnauthorized = true;
+}
+const client = mqtt.connect(
+  `${tlsEnabled ? "mqtts" : "mqtt"}://${MQTT_BROKER}:${MQTT_PORT}`,
+  options,
+);
 
 function statusFor(levelCm) {
   if (levelCm >= 50) return "CRITICAL";
@@ -55,7 +70,7 @@ function statusFor(levelCm) {
 let readingsSent = 0;
 
 client.on("connect", () => {
-  console.log(`Simulating ${nodeIds.length} nodes on topic "${MQTT_TOPIC}"...`);
+  console.log(`Simulating ${nodeIds.length} nodes on topic "${MQTT_SIM_TOPIC}"...`);
 
   const interval = setInterval(() => {
     nodeIds.forEach((nodeId, index) => {
@@ -68,13 +83,14 @@ client.on("connect", () => {
             : 50 + (phase - 8) * 5;
       const payload = {
         node_id: nodeId,
+        simulated: true,
         timestamp: new Date().toISOString(),
         water_level_cm: levelCm,
         battery_v: 3.7 - (index % 4) * 0.1,
         status: statusFor(levelCm),
       };
 
-      client.publish(MQTT_TOPIC, JSON.stringify(payload), { qos: 1 });
+      client.publish(MQTT_SIM_TOPIC, JSON.stringify(payload), { qos: 1 });
       console.log("Published:", payload);
     });
 

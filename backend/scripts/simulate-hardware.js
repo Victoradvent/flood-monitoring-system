@@ -1,5 +1,5 @@
 // SIMULATED HARDWARE - replace this process with firmware/node.ino on deployment.
-// This uses the same MQTT topic and JSON contract as the ESP32 firmware.
+// This uses a separate MQTT topic and credential from field devices.
 // It models sensor noise/failures and a SIM800L-like intermittent transport.
 
 require("dotenv").config();
@@ -19,11 +19,11 @@ const seed = Number(argument("seed", process.env.SIM_SEED || 42));
 const nodeIds = Array.from({ length: nodes }, (_, index) => `NODE${String(index + 1).padStart(3, "0")}`);
 const broker = process.env.MQTT_BROKER || "mqtt";
 const port = Number(process.env.MQTT_PORT || 1883);
-const topic = process.env.MQTT_TOPIC || "nodes/flood";
+const topic = process.env.MQTT_SIM_TOPIC || "nodes/flood/simulated";
 const tlsEnabled = String(process.env.MQTT_TLS || "false").toLowerCase() === "true";
 const options = {
-  username: process.env.MQTT_USER,
-  password: process.env.MQTT_PASS,
+  username: process.env.MQTT_SIM_USER,
+  password: process.env.MQTT_SIM_PASS,
   reconnectPeriod: 2000,
 };
 if (tlsEnabled) {
@@ -131,6 +131,7 @@ client.on("connect", () => {
       const reading = sensor.read(sequence, index);
       const payload = {
         node_id: nodeId,
+        simulated: true,
         timestamp: new Date().toISOString(),
         sequence,
         battery_v: Number((3.65 - (index % 4) * 0.08).toFixed(2)),

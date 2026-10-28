@@ -18,6 +18,14 @@ function timeAgo(s) {
   if (h < 24) return `${h} hr ago`;
   return new Date(s).toLocaleString();
 }
+function unavailableTelemetry(node, now) {
+  const timestamp = new Date(node.last_update).getTime();
+  return (
+    !Number.isFinite(timestamp) ||
+    timestamp > now ||
+    now - timestamp > node.stale_after_seconds * 1000
+  );
+}
 export default function ResidentDashboard({ token }) {
   const [data, setData] = useState(null),
     [error, setError] = useState(""),
@@ -47,6 +55,31 @@ export default function ResidentDashboard({ token }) {
     return () => clearInterval(i);
   }, [token, fetchStatus]);
   useEffect(() => {
+    const interval = setInterval(() => {
+      setData((current) => {
+        if (!current) return current;
+        const now = Date.now();
+        return {
+          ...current,
+          nodes: current.nodes.map((node) =>
+            unavailableTelemetry(node, now) &&
+            node.data_freshness !== "STALE" &&
+            node.data_freshness !== "UNAVAILABLE"
+              ? {
+                  ...node,
+                  status: "SENSOR_ERROR",
+                  data_freshness: "STALE",
+                  safety_message:
+                    "Sensor data is stale. Flood conditions are unknown; follow local emergency guidance.",
+                }
+              : node,
+          ),
+        };
+      });
+    }, 5000);
+    return () => clearInterval(interval);
+  }, []);
+  useEffect(() => {
     if (!data || !data.nodes.length) return;
     const ids = new Set(data.nodes.map((n) => n.node_id));
     return subscribe((msg) => {
@@ -65,6 +98,15 @@ export default function ResidentDashboard({ token }) {
                   status: p.status || n.status,
                   water_level_cm: p.water_level_cm,
                   last_update: p.timestamp,
+                  data_freshness: "CURRENT",
+                  safety_message:
+                    p.status === "SENSOR_ERROR"
+                      ? "The sensor reported an error. Flood conditions are unknown; follow local emergency guidance."
+                      : p.status === "CRITICAL"
+                        ? "Water levels are critical near your area. Move to higher ground and stay away from electrical equipment and transformers."
+                        : p.status === "WARNING"
+                          ? "Water levels are rising near your area. Stay alert, avoid low-lying routes, and keep away from electrical equipment."
+                          : "Current sensor data reports normal water levels. Continue following local safety guidance.",
                 }
               : n,
           ),
@@ -158,7 +200,7 @@ export default function ResidentDashboard({ token }) {
                 <div>
                   <div className="flex items-center gap-2">
                     <span
-                      className={`h-3 w-3 rounded-full ${n.status === "CRITICAL" ? "bg-red-500" : n.status === "WARNING" ? "bg-amber-500" : "bg-emerald-500"}`}
+                      className={`h-3 w-3 rounded-full ${n.status === "CRITICAL" ? "bg-red-500" : n.status === "WARNING" ? "bg-amber-500" : n.status === "SENSOR_ERROR" ? "bg-slate-400" : "bg-emerald-500"}`}
                     />
                     <h2 className="text-lg font-bold text-slate-900">
                       {n.name}

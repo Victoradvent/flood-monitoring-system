@@ -20,6 +20,7 @@ services:
     volumes:
       - mosquitto_data:/mosquitto/data
       - mosquitto_log:/mosquitto/log
+      - ./mosquitto/config/passwordfile:/mosquitto/config/passwordfile:ro
     ports:
       - "8883:8883"
       - "9002:9002"
@@ -45,6 +46,9 @@ services:
       MQTT_USER: ${MQTT_USER}
       MQTT_PASS: ${MQTT_PASS}
       MQTT_TOPIC: nodes/flood
+      MQTT_SIM_USER: ${MQTT_SIM_USER}
+      MQTT_SIM_PASS: ${MQTT_SIM_PASS}
+      MQTT_SIM_TOPIC: nodes/flood/simulated
       MQTT_TLS: ${MQTT_TLS:-true}
       MQTT_CA_FILE: /run/mqtt-certs/ca.crt
 
@@ -54,6 +58,7 @@ services:
       SMS_SIM_MIN_DELAY_MS: ${SMS_SIM_MIN_DELAY_MS:-100}
       SMS_SIM_MAX_DELAY_MS: ${SMS_SIM_MAX_DELAY_MS:-500}
       SMS_SIM_SEED: ${SMS_SIM_SEED:-fms-sms}
+      READING_STALE_AFTER_SEC: ${READING_STALE_AFTER_SEC:-30}
 
       JWT_SECRET: ${JWT_SECRET}
       PORT: 3000

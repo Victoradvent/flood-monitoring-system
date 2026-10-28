@@ -14,10 +14,3 @@ CREATE TABLE IF NOT EXISTS subscribers (
 CREATE INDEX idx_subscribers_node ON subscribers(node_id);
 CREATE INDEX idx_subscribers_active ON subscribers(active);
 CREATE INDEX idx_subscribers_phone ON subscribers(phone);
-
---  subscribers
-INSERT INTO subscribers (name, phone, node_id, role, active)
-VALUES 
-  ('Resident A', '+2348000000001', 'NODE001', 'resident', TRUE),
-  ('Resident B', '+2348000000002', 'NODE001', 'resident', TRUE),
-  ('Operator Team', '+2348000000000', 'NODE001', 'operator', TRUE);

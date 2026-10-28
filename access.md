@@ -25,18 +25,17 @@ There is no role switcher. To change roles, log out and log in with another acco
 
 ## Create an administrator account
 
-The source database seed contains an `admin` row, but its password is a placeholder and cannot be used:
-
-`004_create_users.sql`
+Fresh database initialization does not seed accounts. Create the first administrator with:
 
 Create or reset a usable administrator account:
 
 ```powershell
 docker compose exec backend node scripts/bootstrap-admin.js `
-  my_admin MyStrongPass123! admin
+  my_admin admin
 ```
 
-This command creates or resets the account. It does not print or recover an existing password.
+Enter the password at the hidden interactive prompt. This command creates or
+resets the account and does not print or recover an existing password.
 
 ## Login steps
 
@@ -78,7 +77,7 @@ Administrator actions include threshold changes, node enable/disable, subscriber
 - If Control Center reports a missing `system_settings` table, apply migrations `016` and `017` to the existing database.
 - Administrator cutoff recommendation is available through `Grid Monitor` and the Control Center.
 - Physical transformer switching is not implemented; cutoff is a recommendation only.
-- The seeded `admin` password is not usable until reset with `bootstrap-admin.js`.
+- Fresh database initialization contains no administrator account; create one with `bootstrap-admin.js`.
 
 # Operator
 
@@ -92,7 +91,7 @@ Create or reset one with:
 
 ```powershell
 docker compose exec backend node scripts/bootstrap-admin.js `
-  my_operator MyStrongPass123! operator
+  my_operator operator
 ```
 
 The script name is historical; it creates both administrator and operator accounts.
@@ -149,23 +148,29 @@ The resident account must also have an active subscriber entry linked to a node.
 
 ## Create a resident account
 
-There is no resident account in the source `004_create_users.sql` seed. An Administrator must create one.
+There is no resident account seed. An Administrator must create one.
 
 First create or reset an administrator:
 
 ```powershell
 docker compose exec backend node scripts/bootstrap-admin.js `
-  my_admin MyStrongPass123! admin
+  my_admin admin
 ```
 
-Get an Administrator token:
+Enter the password at the hidden prompt. Get an Administrator token without
+putting the password in shell history:
 
 ```powershell
+$adminSecurePassword = Read-Host "Administrator password" -AsSecureString
+$adminPassword = ([System.Management.Automation.PSCredential]::new(
+  "my_admin", $adminSecurePassword
+)).GetNetworkCredential().Password
 $adminToken = (Invoke-RestMethod `
   http://localhost:3000/login `
   -Method Post `
   -ContentType 'application/json' `
-  -Body '{"username":"my_admin","password":"MyStrongPass123!"}').token
+  -Body (@{ username = "my_admin"; password = $adminPassword } | ConvertTo-Json)).token
+$adminPassword = $null
 ```
 
 Create the resident account through the Administrator API:
@@ -176,9 +181,13 @@ $headers = @{
   "Content-Type" = "application/json"
 }
 
+$residentSecurePassword = Read-Host "New resident password" -AsSecureString
+$residentPassword = ([System.Management.Automation.PSCredential]::new(
+  "+2348000000001", $residentSecurePassword
+)).GetNetworkCredential().Password
 $body = @{
   username = "+2348000000001"
-  password = "ResidentPass123!"
+  password = $residentPassword
   role = "resident"
   phone = "+2348000000001"
   node_id = "NODE001"
@@ -189,6 +198,7 @@ Invoke-RestMethod `
   -Method Post `
   -Headers $headers `
   -Body $body
+$residentPassword = $null
 ```
 
 The backend creates both:
