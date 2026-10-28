@@ -95,9 +95,32 @@ from this workspace.
 
 ## Release status and limitations
 
-Release identifier: `unreleased` (no commit or build artifact was created).
-Staging and production remain blocked pending dependency-backed builds, database
-and broker integration tests, security/dependency scans, firmware TLS and
-device-identity validation, approved field calibration, provisioned secrets,
-verified backup/restore, monitoring and rollback exercises, and explicit
-deployment authorization.
+Release identifier: `unreleased` (no commit or packaged release artifact was
+created).
+
+### Verification record
+
+- **PASS:** Backend regression suite, 9/9 tests (`npm --prefix backend test`).
+- **PASS:** Frontend production build (`npm --prefix react-dashboard run build`).
+- **PASS:** Backend dependency audit after compatible updates, 0 reported
+  vulnerabilities.
+- **BLOCKED:** Frontend dependency audit reports 36 vulnerabilities (15 high,
+  6 moderate, 15 low). A non-forced `npm audit fix` reduced the initial report
+  from 47, including 2 critical, but did not clear the legacy `react-scripts`
+  dependency tree. Many remaining fixes require breaking changes; `--force`
+  was not used.
+- **PASS:** Changed backend JavaScript syntax checks, including the interactive
+  bootstrap password prompt; CRLF-aware whitespace check.
+- **NOT RUN / BLOCKED:** Docker image/Compose checks, database migrations and
+  integration tests, MQTT/TLS ACL verification, firmware build/field tests,
+  end-to-end/performance tests, backup/restore, monitoring, rollback, staging,
+  and production deployment. Docker and the required isolated/live
+  infrastructure are unavailable here.
+- No production build image, release artifact, backup, or deployment evidence
+  was created. No staging or production approval was provided.
+
+Staging and production remain blocked pending remediation of the frontend
+dependency audit, isolated database and broker integration tests, firmware TLS
+and device-identity validation, approved field calibration, provisioned
+secrets, verified backup/restore, monitoring and rollback exercises, and
+explicit deployment authorization.
