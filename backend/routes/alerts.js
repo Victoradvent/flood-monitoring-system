@@ -3,13 +3,14 @@ const router = express.Router();
 const pool = require("../db");
 const { authMiddleware, requireAnyRole } = require("../auth");
 const { logAudit } = require("../utils/audit");
+const { canAccessZone, normalizeZoneCode } = require("../services/accessControl");
 
 async function alertIsInOperatorScope(user, alertId, database = pool) {
   if (!user.assigned_zone) return false;
   const result = await database.query(
     `SELECT 1 FROM alerts a JOIN nodes n ON n.node_id=a.node_id
-      WHERE a.id=$1 AND (n.name ILIKE $2 OR n.description ILIKE $2)`,
-    [alertId, `%${user.assigned_zone}%`],
+      WHERE a.id=$1 AND n.scope_zone=$2`,
+    [alertId, normalizeZoneCode(user.assigned_zone)],
   );
   return result.rowCount > 0;
 }
@@ -28,9 +29,9 @@ router.get(
         }
         query += ` WHERE node_id IN (
           SELECT node_id FROM nodes
-           WHERE name ILIKE $1 OR description ILIKE $1
+           WHERE scope_zone=$1
         )`;
-        values.push(`%${req.user.assigned_zone}%`);
+        values.push(normalizeZoneCode(req.user.assigned_zone));
       }
       query += " ORDER BY id DESC";
       const { rows } = await pool.query(query, values);
@@ -66,8 +67,20 @@ router.post(
         }
       }
       const { rows } = await database.query(
-        "UPDATE alerts SET acknowledged=TRUE, acknowledged_by=$1, acknowledged_at=NOW() WHERE id=$2 RETURNING *",
-        [req.user.username, id],
+        `UPDATE alerts
+            SET acknowledged=TRUE, acknowledged_by=$1, acknowledged_at=NOW()
+          WHERE id=$2
+            AND ($3::boolean OR EXISTS (
+              SELECT 1 FROM nodes n
+               WHERE n.node_id=alerts.node_id AND n.scope_zone=$4
+            ))
+          RETURNING *`,
+        [
+          req.user.username,
+          id,
+          req.user.role === "admin",
+          normalizeZoneCode(req.user.assigned_zone),
+        ],
       );
       if (!rows[0]) {
         await database.query("ROLLBACK");
@@ -117,8 +130,22 @@ async function updateAlertState(req, res, state) {
       }
     }
     const result = await database.query(
-      "UPDATE alerts SET resolution_status=$1, resolved_by=$2, resolved_at=NOW(), resolution_reason=$3 WHERE id=$4 RETURNING *",
-      [state, req.user.username, reason, req.params.id],
+      `UPDATE alerts
+          SET resolution_status=$1, resolved_by=$2, resolved_at=NOW(), resolution_reason=$3
+        WHERE id=$4
+          AND ($5::boolean OR EXISTS (
+            SELECT 1 FROM nodes n
+             WHERE n.node_id=alerts.node_id AND n.scope_zone=$6
+          ))
+        RETURNING *`,
+      [
+        state,
+        req.user.username,
+        reason,
+        req.params.id,
+        req.user.role === "admin",
+        normalizeZoneCode(req.user.assigned_zone),
+      ],
     );
     if (!result.rowCount) {
       await database.query("ROLLBACK");

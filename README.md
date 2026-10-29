@@ -5,7 +5,7 @@ A real-time flood monitoring and grid equipment control system with automatic ha
 *Features:
 Real-time water level monitoring via MQTT
 Automatic critical hazard detection
-Grid equipment cutoff recommendations (no actual power cutoff)
+Grid equipment cutoff recommendations only (no actual power switching)
 SMS alerts (Twilio integration)
 Web dashboard with live updates
 Audit logging for all actions
@@ -25,11 +25,12 @@ npm --prefix react-dashboard ci
 cp .env.example .env
 
 # Provision a local Mosquitto password file (the tool prompts for the password)
-mosquitto_passwd -c mosquitto/config/passwordfile mqtt_user
+mosquitto_passwd -c mosquitto/config/passwordfile mqtt_backend
 mosquitto_passwd mosquitto/config/passwordfile sim_user
+mosquitto_passwd mosquitto/config/passwordfile mqtt_backend
 
 # Generate development-only MQTT certificates, then start with Docker
-./scripts/generate-dev-certs.ps1
+.\scripts\generate-dev-certs.ps1
 docker compose up --build
 ```
 
@@ -49,11 +50,19 @@ docker compose exec backend node scripts/simulate-hardware.js \
 	--invalid-every=7 --signal-loss-every=5
 ```
 
-This **SIMULATED** ESP32/SIM800L process uses the separate `sim_user` credential and `nodes/flood/simulated` topic. It emits marked synthetic telemetry and queues readings during simulated GSM signal loss. The backend does not persist simulated readings, issue alerts, send SMS, or recommend grid actions; it broadcasts them only to administrator WebSocket clients. Set `MQTT_SIM_PASS` to the distinct password entered for `sim_user`.
+This **SIMULATED** ESP32/SIM800L process uses the separate `sim_user` credential and `nodes/simulated/flood` topic. It emits marked synthetic telemetry and queues readings during simulated GSM signal loss. The backend does not persist simulated readings, issue alerts, send SMS, or recommend grid actions; it broadcasts them only to administrator WebSocket clients. Set `MQTT_SIM_PASS` to the distinct password entered for `sim_user`.
+
+Field devices publish to `nodes/flood/<NODE_ID>` using a unique MQTT username
+that exactly matches the provisioned node ID. Mosquitto's ACL maps each username
+to that topic. Provision the field user's password separately; never reuse the
+backend subscriber or simulator credentials. Firmware must be built with a
+trusted broker CA and per-device settings in the ignored `firmware/secrets.h`
+file (see `firmware/secrets.example.h`). Without valid settings, the firmware
+fails closed and will not connect.
 
 Simulation telemetry is explicitly marked and isolated from persisted field readings, alerts, notifications, and grid recommendations. Synthetic node, subscriber, and equipment records are kept in `db/dev-seed/` and must only be loaded into a disposable development database.
 
-The generated certificates under `mosquitto/certs` are **self-signed development-only certificates**. Replace the CA/server certificate and key with organization-issued certificates, use secret management, and review broker ACLs before production deployment. To use a real SMS provider, set `SMS_PROVIDER=twilio` or `SMS_PROVIDER=http_gateway` and provide the corresponding credentials; no application code change is required.
+The generated certificates under `mosquitto/certs` are **development-only certificates signed by a local CA**. The CA private key is kept under the ignored `.dev-certs/` directory and is not mounted into Mosquitto. Replace the CA/server certificate and key with organization-issued certificates, use secret management, and review broker ACLs before production deployment. To use a real SMS provider, set `SMS_PROVIDER=twilio` or `SMS_PROVIDER=http_gateway` and provide the corresponding credentials; no application code change is required.
 
 ### Production Deployment
 

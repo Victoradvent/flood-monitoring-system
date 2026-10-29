@@ -41,7 +41,7 @@ const {
   MQTT_CA_FILE = "/run/mqtt-certs/ca.crt",
   MQTT_SIM_USER,
   MQTT_SIM_PASS,
-  MQTT_SIM_TOPIC = "nodes/flood/simulated",
+  MQTT_SIM_TOPIC = "nodes/simulated/flood",
 } = process.env;
 
 const tlsEnabled = String(MQTT_TLS).toLowerCase() === "true";

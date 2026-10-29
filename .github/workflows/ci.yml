@@ -1,0 +1,79 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgis/postgis:15-3.4
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: integration-only
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            backend/package-lock.json
+            react-dashboard/package-lock.json
+      - name: Install backend dependencies
+        run: npm ci --prefix backend
+      - name: Install frontend dependencies
+        run: npm ci --prefix react-dashboard
+      - name: Backend tests and syntax checks
+        run: |
+          npm test --prefix backend
+          find backend -path '*/node_modules' -prune -o -name '*.js' -print0 | xargs -0 -n1 node --check
+      - name: Frontend tests and production build
+        run: |
+          npm test --prefix react-dashboard
+          npm run build --prefix react-dashboard
+      - name: Dependency audit
+        run: |
+          npm audit --prefix backend --audit-level=low
+          npm audit --prefix react-dashboard --audit-level=low
+      - name: Verify database migrations
+        env:
+          MIGRATION_TEST_DATABASE_URL: postgres://postgres:integration-only@127.0.0.1:5432/postgres
+          MIGRATION_TEST_ALLOW_CREATE_DATABASE: "true"
+        run: node backend/scripts/verifyMigrations.js
+      - name: Build container images
+        run: |
+          docker build --tag fms-backend-ci ./backend
+          docker build --tag fms-frontend-ci ./react-dashboard
+          docker build --tag fms-mosquitto-ci ./mosquitto
+      - name: Upload validated frontend build
+        uses: actions/upload-artifact@v4
+        with:
+          name: flood-dashboard-${{ github.sha }}
+          path: react-dashboard/dist/
+          if-no-files-found: error
+          retention-days: 7
+
+  secrets:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

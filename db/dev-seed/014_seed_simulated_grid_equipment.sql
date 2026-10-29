@@ -1,8 +1,8 @@
 -- Synthetic grid equipment and locations for disposable development/test databases only.
-INSERT INTO grid_equipment (equipment_code, name, location, status, recommended, description, risk_zone, historical_readings)
+INSERT INTO grid_equipment (equipment_code, name, location, status, recommended, description, risk_zone, historical_readings, scope_zone)
 SELECT seed.equipment_code, seed.name,
        ST_SetSRID(ST_MakePoint(n.lng + offset_lng, n.lat + offset_lat), 4326)::geography,
-      seed.status, FALSE, seed.description, seed.risk_zone, seed.historical_readings
+      seed.status, FALSE, seed.description, seed.risk_zone, seed.historical_readings, n.scope_zone
 FROM (VALUES
   ('TX-AN-001', 'NODE001', 'Simulated Awka North Transformer', 'NORMAL', 'LOW', 0.004, 0.003, 'SIMULATED location; no field asset is represented', '[{"date":"2026-09-10","water_level_cm":18},{"date":"2026-09-12","water_level_cm":22}]'::jsonb),
   ('TX-AN-002', 'NODE002', 'Simulated Ifite Feeder Transformer', 'NORMAL', 'MEDIUM', -0.003, -0.004, 'SIMULATED location; no field asset is represented', '[{"date":"2026-09-10","water_level_cm":27},{"date":"2026-09-12","water_level_cm":31}]'::jsonb),
@@ -18,4 +18,5 @@ ON CONFLICT (equipment_code) DO UPDATE SET
   status = EXCLUDED.status,
   description = EXCLUDED.description,
   risk_zone = EXCLUDED.risk_zone,
-  historical_readings = EXCLUDED.historical_readings;
+  historical_readings = EXCLUDED.historical_readings,
+  scope_zone = EXCLUDED.scope_zone;

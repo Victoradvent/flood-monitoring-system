@@ -16,25 +16,53 @@
 */
 
 #include <WiFi.h>
+#include <WiFiClientSecure.h>
 #include <PubSubClient.h>
 #include <ArduinoJson.h>
 #include "SPIFFS.h"
 #include <time.h>
+#include <string.h>
+
+#if __has_include("secrets.h")
+#include "secrets.h"
+#endif
+
+#ifndef FMS_WIFI_SSID
+#define FMS_WIFI_SSID ""
+#endif
+#ifndef FMS_WIFI_PASSWORD
+#define FMS_WIFI_PASSWORD ""
+#endif
+#ifndef FMS_MQTT_BROKER
+#define FMS_MQTT_BROKER ""
+#endif
+#ifndef FMS_NODE_ID
+#define FMS_NODE_ID ""
+#endif
+#ifndef FMS_MQTT_USERNAME
+#define FMS_MQTT_USERNAME ""
+#endif
+#ifndef FMS_MQTT_PASSWORD
+#define FMS_MQTT_PASSWORD ""
+#endif
+#ifndef FMS_MQTT_CA_CERT
+#define FMS_MQTT_CA_CERT ""
+#endif
 
 HardwareSerial gsmSerial(1);
 
 // ---------- CONFIG ----------
 /* WiFi */
-const char* WIFI_SSID = "YOUR_WIFI_SSID";
-const char* WIFI_PASS = "YOUR_WIFI_PASSWORD";
+const char* WIFI_SSID = FMS_WIFI_SSID;
+const char* WIFI_PASS = FMS_WIFI_PASSWORD;
 
 /* MQTT */
-const char* MQTT_BROKER = "192.168.01.100";
-const uint16_t MQTT_PORT = 1883;
-const char* MQTT_USER = "mqtt_user";
-const char* MQTT_PASS = "mqtt_password";
-const char* MQTT_TOPIC = "nodes/flood";
-const char* NODE_ID = "NODE001";
+const char* MQTT_BROKER = FMS_MQTT_BROKER;
+const uint16_t MQTT_PORT = 8883;
+const char* MQTT_USER = FMS_MQTT_USERNAME;
+const char* MQTT_PASS = FMS_MQTT_PASSWORD;
+const char* NODE_ID = FMS_NODE_ID;
+char MQTT_TOPIC[96];
 
 /* SIM800L fallback. Leave the number empty only when GSM is not installed. */
 const int GSM_RX_PIN = 16;
@@ -66,7 +94,7 @@ const int FILTER_WINDOW = 5;
 const char* BUFFER_FILE = "/unsent.jsonl";
 
 // ---------- GLOBALS ----------
-WiFiClient wifiClient;
+WiFiClientSecure wifiClient;
 PubSubClient mqttClient(wifiClient);
 
 unsigned long lastSampleTime = 0;
@@ -83,6 +111,17 @@ unsigned int sensorFailureCount = 0;
 unsigned long wifiBackoff = 1000;
 unsigned long mqttBackoff = 1000;
 const unsigned long MAX_BACKOFF = 60000;
+
+bool hasProvisionedSecurity() {
+  return WIFI_SSID[0] != '\0' &&
+         WIFI_PASS[0] != '\0' &&
+         MQTT_BROKER[0] != '\0' &&
+         NODE_ID[0] != '\0' &&
+         strcmp(MQTT_USER, NODE_ID) == 0 &&
+         MQTT_PASS[0] != '\0' &&
+         strstr(FMS_MQTT_CA_CERT, "-----BEGIN CERTIFICATE-----") != nullptr &&
+         strstr(FMS_MQTT_CA_CERT, "-----END CERTIFICATE-----") != nullptr;
+}
 
 bool waitForGsmResponse(const char* expected, unsigned long timeoutMs) {
   unsigned long started = millis();
@@ -200,6 +239,10 @@ String isoTimestamp() {
 
 /* WiFi connection with backoff */
 void connectWiFi() {
+  if (!hasProvisionedSecurity()) {
+    Serial.println("Network disabled: security configuration is missing or invalid");
+    return;
+  }
   if (WiFi.status() == WL_CONNECTED) return;
   Serial.printf("Connecting to WiFi %s\n", WIFI_SSID);
   WiFi.begin(WIFI_SSID, WIFI_PASS);
@@ -222,6 +265,7 @@ void connectWiFi() {
 
 /* MQTT connection with auth and backoff */
 void connectMQTT() {
+  if (!hasProvisionedSecurity()) return;
   if (mqttClient.connected()) return;
   mqttClient.setServer(MQTT_BROKER, MQTT_PORT);
   Serial.printf("Connecting to MQTT %s:%d\n", MQTT_BROKER, MQTT_PORT);
@@ -365,12 +409,22 @@ void setup() {
 
   initSPIFFS();
 
+  if (!hasProvisionedSecurity()) {
+    Serial.println("SECURITY CONFIGURATION REQUIRED; MQTT is disabled");
+    return;
+  }
+  snprintf(MQTT_TOPIC, sizeof(MQTT_TOPIC), "nodes/flood/%s", NODE_ID);
+  wifiClient.setCACert(FMS_MQTT_CA_CERT);
   connectWiFi();
   connectMQTT();
 }
 
 // ---------- LOOP ----------
 void loop() {
+  if (!hasProvisionedSecurity()) {
+    delay(1000);
+    return;
+  }
   // Ensure WiFi
   if (WiFi.status() != WL_CONNECTED) {
     connectWiFi();

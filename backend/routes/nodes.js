@@ -3,6 +3,7 @@ const router = express.Router();
 const pool = require("../db");
 const { authMiddleware, requireAnyRole, requireRole } = require("../auth");
 const { logAudit } = require("../utils/audit");
+const { normalizeZoneCode } = require("../services/accessControl");
 
 router.get("/", authMiddleware, requireAnyRole(["admin", "operator", "resident"]), async (req, res) => {
   try {
@@ -10,8 +11,18 @@ router.get("/", authMiddleware, requireAnyRole(["admin", "operator", "resident"]
       ? `SELECT n.node_id, n.name, n.description, n.lat, n.lng, n.active
            FROM nodes n JOIN subscribers s ON s.node_id = n.node_id
           WHERE s.phone = $1 AND s.role = 'resident' AND s.active = TRUE ORDER BY n.id`
-      : "SELECT * FROM nodes ORDER BY id";
-    const { rows } = await pool.query(query, req.user.role === "resident" ? [req.user.username] : []);
+      : req.user.role === "operator"
+        ? "SELECT * FROM nodes WHERE scope_zone=$1 ORDER BY id"
+        : "SELECT * FROM nodes ORDER BY id";
+    if (req.user.role === "operator" && !req.user.assigned_zone) {
+      return res.status(403).json({ error: "Operator zone is not configured" });
+    }
+    const values = req.user.role === "resident"
+      ? [req.user.username]
+      : req.user.role === "operator"
+        ? [normalizeZoneCode(req.user.assigned_zone)]
+        : [];
+    const { rows } = await pool.query(query, values);
     res.json(rows);
   } catch (err) {
     res.status(500).json({ error: err.message });

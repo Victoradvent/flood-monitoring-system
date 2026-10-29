@@ -19,7 +19,7 @@ const seed = Number(argument("seed", process.env.SIM_SEED || 42));
 const nodeIds = Array.from({ length: nodes }, (_, index) => `NODE${String(index + 1).padStart(3, "0")}`);
 const broker = process.env.MQTT_BROKER || "mqtt";
 const port = Number(process.env.MQTT_PORT || 1883);
-const topic = process.env.MQTT_SIM_TOPIC || "nodes/flood/simulated";
+const topic = process.env.MQTT_SIM_TOPIC || "nodes/simulated/flood";
 const tlsEnabled = String(process.env.MQTT_TLS || "false").toLowerCase() === "true";
 const options = {
   username: process.env.MQTT_SIM_USER,

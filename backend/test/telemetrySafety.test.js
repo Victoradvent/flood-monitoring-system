@@ -85,42 +85,78 @@ test("duplicate and out-of-order readings cannot advance a node's current state"
   assert.equal(isNewerReading("not-a-timestamp", latest), false);
 });
 
-test("simulated telemetry is isolated by topic and explicit marker", () => {
+test("simulated telemetry is isolated by namespace and explicit marker", () => {
+  const fieldTopic = "nodes/flood";
+  const simulationTopic = "nodes/simulated/flood";
   assert.equal(
     classifyTelemetrySource(
-      "nodes/flood/simulated",
-      "nodes/flood",
-      "nodes/flood/simulated",
+      simulationTopic,
+      fieldTopic,
+      simulationTopic,
       true,
+      "NODE001",
     ),
     "SIMULATED",
   );
   assert.equal(
     classifyTelemetrySource(
-      "nodes/flood",
-      "nodes/flood",
-      "nodes/flood/simulated",
-      true,
-    ),
-    "IGNORE",
-  );
-  assert.equal(
-    classifyTelemetrySource(
-      "nodes/flood/simulated",
-      "nodes/flood",
-      "nodes/flood/simulated",
+      "nodes/flood/NODE001",
+      fieldTopic,
+      simulationTopic,
       false,
-    ),
-    "IGNORE",
-  );
-  assert.equal(
-    classifyTelemetrySource(
-      "nodes/flood",
-      "nodes/flood",
-      "nodes/flood/simulated",
-      false,
+      "NODE001",
     ),
     "FIELD",
+  );
+  assert.equal(
+    classifyTelemetrySource(
+      simulationTopic,
+      fieldTopic,
+      simulationTopic,
+      false,
+      "NODE001",
+    ),
+    "IGNORE",
+  );
+  assert.equal(
+    classifyTelemetrySource(
+      "nodes/flood/NODE001",
+      fieldTopic,
+      simulationTopic,
+      true,
+      "NODE001",
+    ),
+    "IGNORE",
+  );
+  assert.equal(
+    classifyTelemetrySource(
+      "nodes/flooding/NODE001",
+      fieldTopic,
+      simulationTopic,
+      false,
+      "NODE001",
+    ),
+    "IGNORE",
+  );
+  assert.equal(
+    classifyTelemetrySource(
+      "nodes/flood/NODE002",
+      fieldTopic,
+      simulationTopic,
+      false,
+      "NODE001",
+    ),
+    "IGNORE",
+  );
+  assert.equal(
+    classifyTelemetrySource(
+      "nodes/flood/NODE001/extra",
+      fieldTopic,
+      simulationTopic,
+      false,
+      "NODE001",
+    ),
+    "IGNORE",
   );
 });
 

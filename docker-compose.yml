@@ -21,6 +21,7 @@ services:
       - mosquitto_data:/mosquitto/data
       - mosquitto_log:/mosquitto/log
       - ./mosquitto/config/passwordfile:/mosquitto/config/passwordfile:ro
+      - ./mosquitto/certs:/mosquitto/certs:ro
     ports:
       - "8883:8883"
       - "9002:9002"
@@ -48,7 +49,7 @@ services:
       MQTT_TOPIC: nodes/flood
       MQTT_SIM_USER: ${MQTT_SIM_USER}
       MQTT_SIM_PASS: ${MQTT_SIM_PASS}
-      MQTT_SIM_TOPIC: nodes/flood/simulated
+      MQTT_SIM_TOPIC: nodes/simulated/flood
       MQTT_TLS: ${MQTT_TLS:-true}
       MQTT_CA_FILE: /run/mqtt-certs/ca.crt
 

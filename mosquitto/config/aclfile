@@ -1,7 +1,11 @@
-user mqtt_user
-topic write nodes/flood
-topic read nodes/flood
-topic read nodes/flood/simulated
+user mqtt_backend
+topic read nodes/flood/#
+topic read nodes/simulated/flood
+topic deny write nodes/flood/#
+topic deny write nodes/simulated/flood
 
 user sim_user
-topic write nodes/flood/simulated
+topic write nodes/simulated/flood
+topic deny write nodes/flood/#
+
+pattern write nodes/flood/%u

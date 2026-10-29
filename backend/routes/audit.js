@@ -1,14 +1,14 @@
 const express = require("express");
 const router = express.Router();
 const pool = require("../db");
-const { authMiddleware, requireAnyRole, requireRole } = require("../auth");
+const { authMiddleware, requireRole } = require("../auth");
 const { logAudit } = require("../utils/audit");
 
 // Get audit logs (JSON by default)
 router.get(
   "/",
   authMiddleware,
-  requireAnyRole(["admin", "operator"]),
+  requireRole("admin"),
   async (req, res) => {
     try {
       const r = await pool.query(`
@@ -28,7 +28,7 @@ router.get(
 router.get(
   "/filter",
   authMiddleware,
-  requireAnyRole(["admin", "operator"]),
+  requireRole("admin"),
   async (req, res) => {
     const { start, end, operator, action } = req.query;
     const operatorId = req.user.user_id;

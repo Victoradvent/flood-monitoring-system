@@ -48,3 +48,6 @@ coverage/
 
 mosquitto/certs/*.key
 mosquitto/certs/*.crt
+mosquitto/certs/*.srl
+/.dev-certs/
+/firmware/secrets.h

@@ -10,7 +10,9 @@ const bcrypt = require("bcrypt");
 const cors = require("cors");
 const fs = require("fs");
 const { createSmsProvider } = require("./services/smsProvider");
+const { createAlertWithRecipients } = require("./services/alertStore");
 const { logAudit } = require("./utils/audit");
+const { canAccessZone, normalizeZoneCode } = require("./services/accessControl");
 const {
   authenticateToken,
   authMiddleware,
@@ -41,8 +43,8 @@ const {
   MQTT_PORT,
   MQTT_USER,
   MQTT_PASS,
-  MQTT_TOPIC,
-  MQTT_SIM_TOPIC = "nodes/flood/simulated",
+  MQTT_TOPIC = "nodes/flood",
+  MQTT_SIM_TOPIC = "nodes/simulated/flood",
   PG_HOST,
   PG_PORT,
   PG_USER,
@@ -70,6 +72,7 @@ const {
 } = process.env;
 const VALID_ROLES = new Set(["admin", "operator", "resident"]);
 const READING_STALE_AFTER_MS = Number(READING_STALE_AFTER_SEC) * 1000;
+const ALERT_COOLDOWN_SECONDS = Number(ALERT_COOLDOWN_SEC);
 const {
   areValidThresholds,
   classifyTelemetrySource,
@@ -85,6 +88,10 @@ if (!SECRET) {
 }
 if (!Number.isFinite(READING_STALE_AFTER_MS) || READING_STALE_AFTER_MS <= 0) {
   console.error("FATAL: READING_STALE_AFTER_SEC must be a positive number");
+  process.exit(1);
+}
+if (!Number.isFinite(ALERT_COOLDOWN_SECONDS) || ALERT_COOLDOWN_SECONDS <= 0) {
+  console.error("FATAL: ALERT_COOLDOWN_SEC must be a positive number");
   process.exit(1);
 }
 const mqttUrl = `${String(MQTT_TLS).toLowerCase() === "true" ? "mqtts" : "mqtt"}://${MQTT_BROKER}:${MQTT_PORT}`;
@@ -122,8 +129,6 @@ const smsProvider = createSmsProvider({
   seed: SMS_SIM_SEED,
 });
 
-// In-memory cooldown map: { "<node_id>::<level>": timestamp }
-const cooldownMap = new Map();
 const runtimeThresholds = {
   warning_cm: Number(WARNING_LEVEL_CM),
   critical_cm: Number(CRITICAL_LEVEL_CM),
@@ -138,6 +143,7 @@ const app = express();
 const server = require("http").createServer(app);
 const wss = new WebSocket.Server({ noServer: true });
 app.set("wss", wss);
+app.set("broadcast", broadcast);
 app.locals.thresholds = runtimeThresholds;
 let thresholdsReady = false;
 let loadingThresholds = false;
@@ -172,8 +178,21 @@ app.use(cors());
 app.use(express.json());
 
 async function websocketContext(user) {
-  const account = await pool.query("SELECT role, username, assigned_zone, active FROM users WHERE id=$1", [user.user_id]);
-  if (!account.rowCount || account.rows[0].active === false || account.rows[0].role !== user.role) throw new Error("inactive or changed account");
+  const account = await pool.query(
+    `SELECT u.role, u.username, u.active, z.zone_code AS assigned_zone
+       FROM users u
+       LEFT JOIN operational_zones z ON z.zone_code = u.assigned_zone
+      WHERE u.id=$1`,
+    [user.user_id],
+  );
+  if (
+    !account.rowCount ||
+    account.rows[0].active === false ||
+    account.rows[0].role !== user.role ||
+    account.rows[0].username !== user.username
+  ) {
+    throw new Error("inactive or changed account");
+  }
   const currentUser = { ...user, ...account.rows[0] };
   if (currentUser.role === "admin") return { ...currentUser, nodeIds: null };
   if (currentUser.role === "resident") {
@@ -183,23 +202,22 @@ async function websocketContext(user) {
     );
     return { ...currentUser, nodeIds: new Set(result.rows.map((row) => row.node_id)) };
   }
-  if (!currentUser.assigned_zone) {
-    return { ...currentUser, nodeIds: new Set() };
-  }
-  const result = await pool.query(
-    "SELECT node_id FROM nodes WHERE name ILIKE $1 OR description ILIKE $1",
-    [`%${currentUser.assigned_zone}%`],
-  );
-  return { ...currentUser, nodeIds: new Set(result.rows.map((row) => row.node_id)) };
+  return { ...currentUser, assigned_zone: normalizeZoneCode(currentUser.assigned_zone), nodeIds: null };
 }
 
 function websocketCanReceive(context, event) {
   if (context.role === "admin") return true;
   if (event.type === "simulation_reading") return false;
-  if (event.type === "reading") return context.nodeIds === null || context.nodeIds.has(event.payload?.node_id);
-  if (event.type === "alert") return context.nodeIds === null || context.nodeIds.has(event.node);
+  if (event.type === "reading") {
+    if (context.role === "resident") return context.nodeIds?.has(event.payload?.node_id) || false;
+    return canAccessZone(context.role, context.assigned_zone, event.payload?.scope_zone);
+  }
+  if (event.type === "alert") {
+    if (context.role === "resident") return context.nodeIds?.has(event.node) || false;
+    return canAccessZone(context.role, context.assigned_zone, event.scope_zone);
+  }
   if (["grid_recommendation", "grid_hazard", "inspection_complete"].includes(event.type)) {
-    return context.role === "operator" && (context.nodeIds === null || context.nodeIds.has(event.node_id));
+    return canAccessZone(context.role, context.assigned_zone, event.equipment?.scope_zone);
   }
   return false;
 }
@@ -236,11 +254,15 @@ app.get("/health", async (req, res) => {
     database: "UP",
     mqtt: client.connected ? "UP" : "DOWN",
     thresholds: thresholdsReady ? "UP" : "DOWN",
+    zone_scope: "UP",
   };
   try {
     await pool.query("SELECT 1");
+    const zoneSchema = await pool.query("SELECT to_regclass('operational_zones') AS zones");
+    if (!zoneSchema.rows[0]?.zones) checks.zone_scope = "DOWN";
   } catch {
     checks.database = "DOWN";
+    checks.zone_scope = "DOWN";
   }
   const ready = Object.values(checks).every((check) => check === "UP");
   res.status(ready ? 200 : 503).json({
@@ -252,7 +274,7 @@ app.get("/health", async (req, res) => {
 });
 
 // Metrics are observational only; no role can mutate operational measurements.
-app.get("/system/metrics", authMiddleware, requireAnyRole(["admin", "operator"]), async (req, res) => {
+app.get("/system/metrics", authMiddleware, requireRole("admin"), async (req, res) => {
   try {
     const result = await pool.query(`SELECT
       COUNT(*)::int AS readings,
@@ -430,13 +452,24 @@ app.get(
           return res.status(403).json({ error: "Operator zone is not configured" });
         }
         const scope = await pool.query(
-          "SELECT 1 FROM nodes WHERE node_id=$1 AND (name ILIKE $2 OR description ILIKE $2)",
-          [node, `%${req.user.assigned_zone}%`],
+          "SELECT 1 FROM nodes WHERE node_id=$1 AND scope_zone=$2",
+          [node, normalizeZoneCode(req.user.assigned_zone)],
         );
         if (!scope.rowCount) return res.status(403).json({ error: "Node outside assigned scope" });
       }
-      const q = `SELECT timestamp, water_level_cm FROM readings WHERE node_id = $1 ORDER BY timestamp DESC LIMIT $2`;
-      const r = await pool.query(q, [node, limit]);
+      const operator = req.user.role === "operator";
+      const q = operator
+        ? `SELECT r.timestamp, r.water_level_cm
+             FROM readings r
+             JOIN nodes n ON n.node_id=r.node_id
+            WHERE r.node_id=$1 AND n.scope_zone=$3
+            ORDER BY r.timestamp DESC LIMIT $2`
+        : `SELECT timestamp, water_level_cm FROM readings
+            WHERE node_id=$1 ORDER BY timestamp DESC LIMIT $2`;
+      const values = operator
+        ? [node, limit, normalizeZoneCode(req.user.assigned_zone)]
+        : [node, limit];
+      const r = await pool.query(q, values);
       res.json(r.rows);
     } catch (err) {
       console.error("History error", err);
@@ -465,14 +498,17 @@ app.post("/alert-events", authMiddleware, async (req, res) => {
   if (!["admin", "operator"].includes(req.user.role)) return res.status(403).json({ error: "Forbidden" });
 
   try {
-    const alertResult = await pool.query("SELECT node_id FROM alerts WHERE id=$1", [alert_id]);
+    const alertResult = await pool.query(
+      `SELECT a.node_id, n.scope_zone
+         FROM alerts a JOIN nodes n ON n.node_id = a.node_id
+        WHERE a.id=$1`,
+      [alert_id],
+    );
     if (!alertResult.rowCount) return res.status(404).json({ error: "alert not found" });
     if (req.user.role === "operator") {
-      if (!req.user.assigned_zone) {
-        return res.status(403).json({ error: "Operator zone is not configured" });
+      if (!canAccessZone(req.user.role, req.user.assigned_zone, alertResult.rows[0].scope_zone)) {
+        return res.status(403).json({ error: "alert outside assigned scope" });
       }
-      const nodeResult = await pool.query("SELECT 1 FROM nodes WHERE node_id=$1 AND (name ILIKE $2 OR description ILIKE $2)", [alertResult.rows[0].node_id, `%${req.user.assigned_zone}%`]);
-      if (!nodeResult.rowCount) return res.status(403).json({ error: "alert outside assigned scope" });
     }
     const q = `INSERT INTO alert_events (alert_id, event_type, user_agent, operator)
                VALUES ($1,$2,$3,$4) RETURNING *`;
@@ -637,7 +673,7 @@ const client = mqtt.connect(mqttUrl, mqttOptions);
 
 client.on("connect", () => {
   console.log("MQTT connected");
-  client.subscribe([MQTT_TOPIC, MQTT_SIM_TOPIC], { qos: 1 }, (err) => {
+  client.subscribe([MQTT_TOPIC, `${MQTT_TOPIC}/#`, MQTT_SIM_TOPIC], { qos: 1 }, (err) => {
     if (err) console.error("Subscribe error", err);
   });
 });
@@ -751,38 +787,6 @@ async function saveReading(payload, raw) {
   }
 }
 
-// Insert alert record
-async function saveAlert(node_id, level, waterLevelCm) {
-  const q = `INSERT INTO alerts (
-      node_id,
-      alert_level,
-      water_level_cm,
-      sent,
-      provider,
-      provider_response )
-    VALUES ($1, $2, $3, $4, $5, $6)
-    RETURNING id`;
-
-  const values = [node_id, level, waterLevelCm, false, null, null];
-
-  const result = await pool.query(q, values);
-
-  return result.rows[0].id;
-}
-
-// Check cooldown
-function isInCooldown(node_id, level) {
-  const key = `${node_id}::${level}`;
-  const ts = cooldownMap.get(key);
-  if (!ts) return false;
-  const now = Date.now();
-  return now - ts < ALERT_COOLDOWN_SEC * 1000;
-}
-function setCooldown(node_id, level) {
-  const key = `${node_id}::${level}`;
-  cooldownMap.set(key, Date.now());
-}
-
 async function maybeTriggerGridHazard(payload) {
   try {
     const nodeId = payload.node_id;
@@ -801,6 +805,8 @@ async function maybeTriggerGridHazard(payload) {
         ge.location IS NOT NULL
         AND n.lat IS NOT NULL
         AND n.lng IS NOT NULL
+        AND ge.scope_zone IS NOT NULL
+        AND BTRIM(ge.scope_zone) <> ''
         AND ge.status = 'NORMAL'
         AND ST_DWithin(
           ge.location,
@@ -913,6 +919,7 @@ async function sendSms(to, body) {
       lastError = err;
       const status = err.response?.status || err.status;
       const retryable = !status || status === 408 || status === 429 || status >= 500;
+      err.retryable = retryable;
       console.error(`SMS attempt ${attempt}/3 failed for ${to}: ${err.message}`);
       if (!retryable || attempt === 3) break;
       await new Promise((resolve) => setTimeout(resolve, 250 * 2 ** (attempt - 1)));
@@ -936,88 +943,57 @@ async function handleAlert(payload) {
   // Only send for WARNING or CRITICAL
   if (!["WARNING", "CRITICAL"].includes(level)) return;
 
-  // Deduplicate / cooldown
-  if (isInCooldown(node, level)) {
-    console.log(`Cooldown active for ${node} ${level}, skipping SMS`);
+  const alert = await createAlertWithRecipients(pool, {
+    nodeId: node,
+    level,
+    waterLevelCm: levelValue,
+    cooldownSeconds: ALERT_COOLDOWN_SECONDS,
+  });
+  if (!alert.created) {
+    console.log(`Persisted cooldown active for ${node} ${level}, skipping duplicate alert`);
     return;
   }
 
-  // Lookup subscribers from database
-  let recipients = [];
-  try {
-    const subQuery = `SELECT id, phone FROM subscribers WHERE node_id = $1 AND active = TRUE AND role IN ('operator', 'resident')`;
-    const subResult = await pool.query(subQuery, [node]);
-    recipients = subResult.rows;
-  } catch (err) {
-    console.error("Subscriber lookup error", err);
-  }
-
-  // If no subscribers found, log it but don't fail - alert is recorded in database
-  if (recipients.length === 0) {
-    console.log(
-      `No active subscribers for node ${node}, but alert is recorded in database`,
-    );
-    // Optionally set a default operator phone here for testing
-    // recipients = [process.env.DEFAULT_ALERT_PHONE];
-  }
-
-  const body = composeAlertMessage(node, level, levelValue, ts);
-
-  const alertId = await saveAlert(node, level, levelValue);
-  let sentCount = 0;
-  let provider = null;
-  let providerResp = null;
-  for (const recipient of recipients) {
-    let deliveryStatus = "FAILED";
-    let response = null;
-    try {
-      const delivery = await sendSms(recipient.phone, body);
-      provider = delivery.provider;
-      response = delivery.response;
-      deliveryStatus = "SENT";
-      sentCount += 1;
-      providerResp = response;
-      console.log(`SMS sent to ${recipient.phone} via ${provider}`);
-    } catch (err) {
-      console.error("SMS send error", err.message);
-      response = { error: err.message };
-    }
-    await pool.query(
-      `INSERT INTO alert_recipients (alert_id, subscriber_id, status, delivery_provider,
-      provider_response, sent_at, attempts, next_attempt_at, last_error)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-      [
-        alertId,
-        recipient.id,
-        deliveryStatus,
-        provider,
-        response,
-        deliveryStatus === "SENT" ? new Date() : null,
-        3,
-        deliveryStatus === "SENT" ? null : new Date(Date.now() + 60000),
-        deliveryStatus === "SENT" ? null : response?.error || "delivery failed",
-      ],
-    );
-  }
-
-  await pool.query(
-    "UPDATE alerts SET sent=$1, provider=$2, provider_response=$3 WHERE id=$4",
-    [sentCount > 0, provider, providerResp, alertId],
-  );
-  if (sentCount > 0) setCooldown(node, level);
-
-  // Broadcast alert to dashboard
+  // Broadcast only after the alert and its delivery queue are persisted.
   broadcast({
     type: "alert",
     node: node,
+    scope_zone: payload.scope_zone,
     level: level,
     levelValue: levelValue,
     timestamp: ts,
-    id: alertId,
+    id: alert.id,
   });
+
+  try {
+    await retryFailedDeliveries();
+  } catch (err) {
+    console.error("Initial SMS queue processing failed", err.message);
+  }
 }
 
 async function retryFailedDeliveries() {
+  const claim = await pool.query(`
+    WITH candidates AS (
+      SELECT id
+        FROM alert_recipients
+       WHERE status IN ('FAILED', 'PENDING')
+         AND attempts < 8
+         AND (next_attempt_at IS NULL OR next_attempt_at <= NOW())
+       ORDER BY id
+       FOR UPDATE SKIP LOCKED
+       LIMIT 50
+    )
+    UPDATE alert_recipients ar
+       SET status='PENDING',
+           attempts=ar.attempts+1,
+           next_attempt_at=NOW() + INTERVAL '1 minute'
+      FROM candidates
+     WHERE ar.id=candidates.id
+    RETURNING ar.id
+  `);
+  if (!claim.rowCount) return;
+
   const result = await pool.query(`
     SELECT ar.id, ar.alert_id, ar.subscriber_id, ar.attempts,
            a.node_id, a.alert_level, a.water_level_cm, a.triggered_at,
@@ -1025,12 +1001,9 @@ async function retryFailedDeliveries() {
       FROM alert_recipients ar
       JOIN alerts a ON a.id = ar.alert_id
       JOIN subscribers s ON s.id = ar.subscriber_id
-     WHERE ar.status = 'FAILED'
-       AND ar.attempts < 8
-       AND (ar.next_attempt_at IS NULL OR ar.next_attempt_at <= NOW())
+     WHERE ar.id = ANY($1::bigint[])
      ORDER BY ar.id
-     LIMIT 50
-  `);
+  `, [claim.rows.map((row) => row.id)]);
 
   for (const delivery of result.rows) {
     const body = composeAlertMessage(
@@ -1044,7 +1017,7 @@ async function retryFailedDeliveries() {
       await pool.query(
         `UPDATE alert_recipients
             SET status='SENT', delivery_provider=$1, provider_response=$2,
-                sent_at=NOW(), attempts=attempts+1, next_attempt_at=NULL, last_error=NULL
+                sent_at=NOW(), next_attempt_at=NULL, last_error=NULL
           WHERE id=$3`,
         [sent.provider, sent.response, delivery.id],
       );
@@ -1054,11 +1027,21 @@ async function retryFailedDeliveries() {
       );
       console.log(`Retried SMS delivery ${delivery.id} successfully`);
     } catch (err) {
-      const nextAttempt = Math.min(delivery.attempts + 1, 8);
+      if (err.retryable === false) {
+        await pool.query(
+          `UPDATE alert_recipients
+             SET status='FAILED', attempts=8, next_attempt_at=NULL, last_error=$1
+           WHERE id=$2`,
+          [err.message, delivery.id],
+        );
+        console.error(`SMS delivery ${delivery.id} permanently failed`, err.message);
+        continue;
+      }
+      const nextAttempt = Math.min(delivery.attempts, 8);
       const delayMs = Math.min(15 * 60 * 1000, 1000 * 2 ** nextAttempt);
       await pool.query(
         `UPDATE alert_recipients
-            SET attempts=attempts+1, next_attempt_at=NOW() + ($1 * INTERVAL '1 second'), last_error=$2
+           SET status='FAILED', next_attempt_at=NOW() + ($1 * INTERVAL '1 second'), last_error=$2
           WHERE id=$3`,
         [Math.ceil(delayMs / 1000), err.message, delivery.id],
       );
@@ -1081,6 +1064,7 @@ client.on("message", async (topic, message) => {
       MQTT_TOPIC,
       MQTT_SIM_TOPIC,
       payload.simulated,
+      payload.node_id,
     );
     if (source === "SIMULATED") {
       broadcast({ type: "simulation_reading", payload });
@@ -1100,7 +1084,7 @@ client.on("message", async (topic, message) => {
     }
 
     const nodeResult = await pool.query(
-      "SELECT lat, lng, active FROM nodes WHERE node_id = $1",
+      "SELECT lat, lng, active, scope_zone FROM nodes WHERE node_id = $1",
       [payload.node_id],
     );
     if (nodeResult.rows.length === 0) {
@@ -1121,6 +1105,7 @@ client.on("message", async (topic, message) => {
     try {
       payload.lat = nodeResult.rows[0].lat;
       payload.lng = nodeResult.rows[0].lng;
+      payload.scope_zone = nodeResult.rows[0].scope_zone;
     } catch (err) {
       console.error("Node lookup error", err);
     }

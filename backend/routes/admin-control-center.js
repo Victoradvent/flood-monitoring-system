@@ -3,6 +3,7 @@ const router = express.Router();
 const pool = require("../db");
 const { authMiddleware, requireRole } = require("../auth");
 const { areValidThresholds } = require("../services/telemetrySafety");
+const { normalizeZoneCode } = require("../services/accessControl");
 
 router.use(authMiddleware, requireRole("admin"));
 
@@ -12,6 +13,133 @@ async function audit(userId, action, notes, database = pool) {
     [userId, action, notes],
   );
 }
+
+router.get("/zones", async (req, res) => {
+  try {
+    const result = await pool.query(
+      "SELECT zone_code, display_name, created_at FROM operational_zones ORDER BY zone_code",
+    );
+    res.json(result.rows);
+  } catch (err) {
+    console.error("Zone list failed", err);
+    res.status(500).json({ error: "Unable to load operational zones" });
+  }
+});
+
+router.post("/zones", async (req, res) => {
+  const zoneCode = normalizeZoneCode(req.body?.zone_code);
+  const displayName = typeof req.body?.display_name === "string"
+    ? req.body.display_name.trim()
+    : "";
+  if (!zoneCode || !displayName || displayName.length > 128) {
+    return res.status(400).json({
+      error: "zone_code must be a valid identifier and display_name must be 1-128 characters",
+    });
+  }
+
+  let database;
+  let transactionStarted = false;
+  try {
+    database = await pool.connect();
+    await database.query("BEGIN");
+    transactionStarted = true;
+    const result = await database.query(
+      `INSERT INTO operational_zones (zone_code, display_name, created_by)
+       VALUES ($1, $2, $3)
+       RETURNING zone_code, display_name, created_at`,
+      [zoneCode, displayName, req.user.user_id],
+    );
+    await audit(
+      req.user.user_id,
+      "CREATE_OPERATIONAL_ZONE",
+      `zone_code=${zoneCode}`,
+      database,
+    );
+    await database.query("COMMIT");
+    transactionStarted = false;
+    res.status(201).json(result.rows[0]);
+  } catch (err) {
+    if (transactionStarted) {
+      try {
+        await database.query("ROLLBACK");
+      } catch (rollbackError) {
+        console.error("Operational zone rollback failed", rollbackError);
+      }
+    }
+    if (err.code === "23505") return res.status(409).json({ error: "zone_code already exists" });
+    console.error("Operational zone creation failed", err);
+    res.status(500).json({ error: "Unable to create operational zone" });
+  } finally {
+    if (database) database.release();
+  }
+});
+
+async function updateResourceZone(req, res, table, resourceName) {
+  if (!Object.hasOwn(req.body || {}, "scope_zone")) {
+    return res.status(400).json({ error: "scope_zone is required; use null to clear the mapping" });
+  }
+  const zoneCode = req.body.scope_zone === null
+    ? null
+    : normalizeZoneCode(req.body.scope_zone);
+  if (req.body.scope_zone !== null && !zoneCode) {
+    return res.status(400).json({ error: "scope_zone must be a valid zone code or null" });
+  }
+  if (!/^\d+$/.test(req.params.id)) return res.status(400).json({ error: `Invalid ${resourceName} id` });
+
+  let database;
+  let transactionStarted = false;
+  try {
+    if (zoneCode !== null) {
+      const zoneExists = await pool.query(
+        "SELECT 1 FROM operational_zones WHERE zone_code=$1",
+        [zoneCode],
+      );
+      if (!zoneExists.rowCount) {
+        return res.status(400).json({ error: "operational zone does not exist" });
+      }
+    }
+    database = await pool.connect();
+    await database.query("BEGIN");
+    transactionStarted = true;
+    const result = await database.query(
+      `UPDATE ${table} SET scope_zone=$1 WHERE id=$2 RETURNING *`,
+      [zoneCode, req.params.id],
+    );
+    if (!result.rowCount) {
+      await database.query("ROLLBACK");
+      transactionStarted = false;
+      return res.status(404).json({ error: `${resourceName} not found` });
+    }
+    await audit(
+      req.user.user_id,
+      `ASSIGN_${resourceName.toUpperCase()}_SCOPE`,
+      `${resourceName}_id=${req.params.id}; scope_zone=${zoneCode || "UNASSIGNED"}`,
+      database,
+    );
+    await database.query("COMMIT");
+    transactionStarted = false;
+    res.json(result.rows[0]);
+  } catch (err) {
+    if (transactionStarted) {
+      try {
+        await database.query("ROLLBACK");
+      } catch (rollbackError) {
+        console.error(`${resourceName} scope rollback failed`, rollbackError);
+      }
+    }
+    console.error(`${resourceName} scope update failed`, err);
+    res.status(500).json({ error: `Unable to update ${resourceName} scope` });
+  } finally {
+    if (database) database.release();
+  }
+}
+
+router.patch("/nodes/:id/scope", async (req, res) =>
+  updateResourceZone(req, res, "nodes", "node"),
+);
+router.patch("/equipment/:id/scope", async (req, res) =>
+  updateResourceZone(req, res, "grid_equipment", "equipment"),
+);
 
 router.get("/overview", async (req, res) => {
   try {

@@ -32,12 +32,20 @@ function isNewerReading(candidateTimestamp, latestTimestamp) {
   return Number.isFinite(latestMs) && candidateMs > latestMs;
 }
 
-function classifyTelemetrySource(topic, fieldTopic, simulationTopic, simulated) {
-  if (topic === simulationTopic) {
+function classifyTelemetrySource(
+  topic,
+  fieldTopic,
+  simulationTopic,
+  simulated,
+  nodeId,
+) {
+  const isExactOrChildTopic = (candidate, root) =>
+    candidate === root || candidate.startsWith(`${root}/`);
+  if (isExactOrChildTopic(topic, simulationTopic)) {
     return simulated === true ? "SIMULATED" : "IGNORE";
   }
-  if (topic === fieldTopic) {
-    return simulated === true ? "IGNORE" : "FIELD";
+  if (topic === `${fieldTopic}/${nodeId}`) {
+    return simulated === false ? "FIELD" : "IGNORE";
   }
   return "IGNORE";
 }

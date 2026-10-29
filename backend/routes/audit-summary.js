@@ -1,13 +1,13 @@
 const express = require("express");
 const router = express.Router();
 const pool = require("../db");
-const { authMiddleware, requireAnyRole } = require("../auth");
+const { authMiddleware, requireRole } = require("../auth");
 
 // Daily summary
 router.get(
   "/daily",
   authMiddleware,
-  requireAnyRole(["admin", "operator"]),
+  requireRole("admin"),
   async (req, res) => {
     try {
       const r = await pool.query(`
@@ -27,7 +27,7 @@ router.get(
 router.get(
   "/weekly",
   authMiddleware,
-  requireAnyRole(["admin", "operator"]),
+  requireRole("admin"),
   async (req, res) => {
     try {
       const r = await pool.query(`
